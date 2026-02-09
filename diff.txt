@@ -1,0 +1,54 @@
+diff --git a/README.md b/README.md
+index 2fc5dba..cc0c5a0 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,47 @@
+-# mic-data
+\ No newline at end of file
++# MIC Data Pipeline
++
++A durable data pipeline for Mason Investment Club (MVP)
++
++**Goals:**
++- Read **holdings + universe** from Google Sheets (or a local CSV fallback)
++- Pull **daily prices** (Yahoo Finance)
++- Pull **macro series** (FRED)
++- Produce **clean tables** in `data/cleaned/` and small **dashboard-ready exports** in `outputs/`
++
++
++## Repo layout
++
++- `config/`
++  - `universe.csv` — tickers to track + roles (HOLDING / WATCHLIST / BENCHMARK)
++  - `settings.yaml` — non-secret settings (date ranges, sheet tab name, etc.)
++- `src/mic_data/` — pipeline code
++- `data/` — raw + cleaned datasets (not committed)
++- `outputs/` — exported CSVs for Sheets / BI (not committed)
++- `docs/` — data contracts + onboarding
++
++## Setup
++See `docs/onboarding.md`
++
++
++## Data outputs
++### Cleaned datasets (internal)
++* `data/cleaned/prices_daily.parquet`
++* `data/cleaned/holdings.parquet`
++* `data/cleaned/universe.parquet`
++
++### Exports (for dashboards)
++* `outputs/portfolio_summary.csv`
++* `outputs/positions_current.csv`
++
++Sheets should **import** exports (e.g., `IMPORTDATA`) rather than recompute core logic.
++
++### Secrets
++
++API keys go in environment variables (`.env`), never in `settings.yaml` or committed files.
++
++## Packages
++* `pandas`
++* `pyyaml`
++* `python-dotenv`
++* `yfinance` (prices)
++* `fredapi` (macro, via FRED)
