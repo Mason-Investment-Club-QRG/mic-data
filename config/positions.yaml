@@ -1,0 +1,16 @@
+google_sheets:
+  sheet_id: "1Vk9nrrh9RgKK4w3kGDC5J3A1luuPnwdMVMPbAgY3qjA"
+  tab_name: "Holdings"
+
+mapping:
+  ticker: "TICKER"
+  shares: "SHARES"
+  name: "STOCK"
+  sector: "SECTOR"
+
+outputs:
+  processed_path: "data/processed/positions_latest.csv"
+  raw_dir: "data/raw/positions"
+
+options:
+  include_as_of: true
