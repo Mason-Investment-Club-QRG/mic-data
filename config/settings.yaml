@@ -1,9 +1,0 @@
-prices:
-  start_date: "2020-01-01"
-  end_date: null        # null = up to today
-  source: "yahoo"
-
-holdings:
-  source: "google_sheet"
-  sheet_url: ""         # fill in later
-  tab_name: "Holdings"  # adjust to match the sheet
