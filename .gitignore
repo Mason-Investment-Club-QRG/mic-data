@@ -6,11 +6,18 @@ venv/
 .env
 
 # Data artifacts
-data/
-outputs/
+data/**
+!data/.gitkeep
+
+outputs/**
+!outputs/.gitkeep
+
 
 # OS
 .DS_Store
 
 # Personal 
+secrets/*
+scripts/env.sh
 diff.txt
+test/
