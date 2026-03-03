@@ -1,72 +1,77 @@
 # MIC Data Pipeline
 
-A durable data pipeline for Mason Investment Club
+Portfolio data pipeline for Mason Investment Club with WRDS-first FF3 modeling.
 
-**Goals:**
-- Read **positions/holdings** from Google Sheets
-- Pull market data for portfolio analytics
-- Run FF3 regression with WRDS as primary factor source
-- Produce validation artifacts comparing WRDS vs static factor inputs
+## What It Does
+- Syncs current positions from Google Sheets into canonical CSV snapshots.
+- Builds latest holdings weights from market prices.
+- Runs FF3 regressions using WRDS factor pulls as the primary source.
+- Falls back to static Ken French factors when WRDS fails.
+- Produces A/B validation artifacts comparing WRDS vs static inputs.
 
+## Pipeline Flow
+1. `positions.sync` -> `data/processed/positions_latest.csv`
+2. `portfolio.holdings` -> `data/processed/holdings_latest.csv`
+3. `models.fama_french_3` -> factor/model artifacts + validation report
 
-## Repo layout
-
-- `config/`
-  - `positions.yaml` — Google Sheet -> canonical positions mapping
-  - `ff3_pipeline.yaml` — FF3 run settings (dates, source paths, outputs)
-- `src/mic_data/` — pipeline code
-- `data/` — raw + cleaned datasets (not committed)
-- `outputs/` — exported CSVs for Sheets / BI (not committed)
-- `docs/` — data contracts + onboarding
+## Repo Layout
+- `config/positions.yaml`: Google Sheet mapping and output paths.
+- `config/ff3_pipeline.yaml`: FF3 run dates, paths, and fallback options.
+- `src/mic_data/positions/`: positions sync logic.
+- `src/mic_data/portfolio/`: holdings + weights logic.
+- `src/mic_data/models/`: FF3 modular pipeline (sources, regression, comparison, runner).
+- `data/`: generated data artifacts (ignored in git).
+- `outputs/`: logs and validation exports (ignored in git).
 
 ## Setup
-See `docs/onboarding.md` if more details are needed.
-### Quickstart (local)
-
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Create `.env` (do not commit) and export sheet credentials as needed:
-
+### Credentials
+- Google Sheets:
 ```bash
-echo "FRED_API_KEY=your_key_here" > .env
 source scripts/env.sh
 ```
+or set `GOOGLE_APPLICATION_CREDENTIALS` manually.
 
-### FF3 pipeline run
-
+- WRDS (recommended non-interactive):
 ```bash
-# Optional: export WRDS username for non-interactive auth
 export WRDS_USERNAME="your_wrds_username"
+```
+On first WRDS use, create `.pgpass` when prompted.
 
-# Uses config/ff3_pipeline.yaml if present
+## Run
+```bash
+PYTHONPATH=src python -m mic_data.positions.sync
+PYTHONPATH=src python -m mic_data.portfolio.holdings
 PYTHONPATH=src python -m mic_data.models.fama_french_3
 ```
 
-## Expected outputs
-### FF3 model inputs
-* `data/processed/model_inputs/factors_wrds_m.parquet`
-* `data/processed/model_inputs/factors_static_m.parquet`
+Optional strict mode (no fallback if WRDS fails):
+```bash
+PYTHONPATH=src python -m mic_data.models.fama_french_3 --no-fallback
+```
 
-### Validation artifacts
-* `outputs/validation/ff3_input_comparison.csv`
-* `outputs/validation/ff3_regression_comparison.json`
-* `outputs/validation/ff3_validation_summary.md`
-* `outputs/logs/ff3_pipeline_<timestamp>.jsonl`
+## Outputs
+### Model Inputs
+- `data/processed/model_inputs/factors_wrds_m.parquet`
+- `data/processed/model_inputs/factors_static_m.parquet`
 
-### Secrets
+### Validation
+- `outputs/validation/ff3_input_comparison.csv`
+- `outputs/validation/ff3_regression_comparison.json`
+- `outputs/validation/ff3_validation_summary.md`
+- `outputs/logs/ff3_pipeline_<timestamp>.jsonl`
 
-API keys and credentials go in environment variables or secret files, never in committed config.
+## Tests
+```bash
+.venv/bin/python -m unittest discover -s test/models -p 'test_*.py'
+```
 
-## Packages
-* `pandas`
-* `pyyaml`
-* `python-dotenv`
-* `yfinance` (prices)
-* `fredapi` (macro, via FRED)
-* `statsmodels` (regression)
-* `wrds` (factor pulls)
-* `pyarrow` (parquet artifacts)
+## Notes
+- All model returns/factors are treated as decimal returns.
+- Keep secrets out of git (`.env`, service-account JSON, WRDS credentials).
+- See `docs/onboarding.md` for additional project onboarding details.
