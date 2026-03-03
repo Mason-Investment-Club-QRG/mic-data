@@ -2,12 +2,29 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Protocol, cast
 
 import pandas as pd
 
-from mic_data.models.constants import FACTOR_COLUMNS
+from mic_data.models.constants import FACTOR_COLUMNS, ModelFrequency
 from mic_data.models.interfaces import FactorSource
+
+
+class WrdsConnection(Protocol):
+    """Minimal WRDS connection contract required by this module."""
+
+    def raw_sql(self, query: str, date_cols: list[str] | None = None) -> pd.DataFrame:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+class WrdsConnectionFactory(Protocol):
+    """Factory signature for creating typed WRDS connections."""
+
+    def __call__(self, *, wrds_username: str | None = None) -> WrdsConnection:
+        ...
 
 
 @dataclass(frozen=True)
@@ -31,13 +48,13 @@ class WrdsFactorSource(FactorSource):
     """
 
     username: str | None = None
-    connection_factory: Callable[..., Any] | None = None
+    connection_factory: WrdsConnectionFactory | None = None
 
     def load_factors(
         self,
         start_date: str,
         end_date: str,
-        frequency: Literal["M"] = "M",
+        frequency: ModelFrequency = "M",
     ) -> pd.DataFrame:
         """Pull WRDS factors and aggregate to monthly frequency.
 
@@ -70,7 +87,7 @@ class WrdsFactorSource(FactorSource):
             ORDER BY date
         """
 
-        conn = None
+        conn: WrdsConnection | None = None
         try:
             conn = self._connect()
             daily = conn.raw_sql(query, date_cols=["date"])
@@ -103,7 +120,7 @@ class WrdsFactorSource(FactorSource):
             raise ValueError("WRDS factor pull has no usable rows after numeric cleaning.")
 
         # Compound daily returns to month-end to match FF3 monthly regression convention.
-        monthly = (1.0 + daily[FACTOR_COLUMNS]).resample("ME").prod() - 1.0
+        monthly = (1.0 + daily[list(FACTOR_COLUMNS)]).resample("ME").prod() - 1.0
 
         start_period = start_ts.to_period("M")
         end_period = end_ts.to_period("M")
@@ -119,7 +136,7 @@ class WrdsFactorSource(FactorSource):
 
         return monthly
 
-    def _connect(self) -> Any:
+    def _connect(self) -> WrdsConnection:
         username = self.username or os.getenv("WRDS_USERNAME")
         factory = self.connection_factory
         if factory is not None:
@@ -133,7 +150,8 @@ class WrdsFactorSource(FactorSource):
             ) from exc
 
         try:
-            return wrds.Connection(wrds_username=username)
+            conn = wrds.Connection(wrds_username=username)
+            return cast(WrdsConnection, conn)
         except Exception as exc:  # pragma: no cover - depends on external auth/runtime
             raise RuntimeError(
                 "Unable to establish WRDS connection. Ensure WRDS_USERNAME and .pgpass "

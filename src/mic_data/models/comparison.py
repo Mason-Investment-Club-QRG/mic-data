@@ -1,12 +1,41 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import dataclass
+from typing import TypedDict
 
 import pandas as pd
 
 from mic_data.models.constants import FACTOR_COLUMNS
 from mic_data.models.regression import FF3RegressionResult
+
+
+class FactorMetricRow(TypedDict):
+    factor: str
+    corr: float
+    mad_bps: float
+    rmse_bps: float
+    n_obs: int
+
+
+class RegressionDeltas(TypedDict):
+    delta_alpha: float
+    delta_alpha_bps: float
+    delta_beta_mkt: float
+    delta_beta_smb: float
+    delta_beta_hml: float
+    delta_r2: float
+    delta_n_obs: int
+    abs_delta_alpha_bps: float
+    abs_delta_beta_mkt: float
+    abs_delta_beta_smb: float
+    abs_delta_beta_hml: float
+    abs_delta_r2: float
+
+
+class SimilarityGate(TypedDict):
+    passed: bool
+    reason_codes: list[str]
+    thresholds: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -42,14 +71,14 @@ def compare_factor_inputs(wrds_factors: pd.DataFrame, static_factors: pd.DataFra
       - Inputs must be decimal returns.
       - MAD/RMSE are reported in basis points for readability.
     """
-    wrds = wrds_factors[FACTOR_COLUMNS].copy()
-    static = static_factors[FACTOR_COLUMNS].copy()
+    wrds = wrds_factors[list(FACTOR_COLUMNS)].copy()
+    static = static_factors[list(FACTOR_COLUMNS)].copy()
 
     overlap = wrds.join(static, how="inner", lsuffix="_wrds", rsuffix="_static").dropna()
     if overlap.empty:
         raise ValueError("No overlapping rows between WRDS and static factor inputs.")
 
-    rows: list[dict[str, Any]] = []
+    rows: list[FactorMetricRow] = []
     for col in FACTOR_COLUMNS:
         wrds_col = overlap[f"{col}_wrds"]
         static_col = overlap[f"{col}_static"]
@@ -71,7 +100,7 @@ def compare_factor_inputs(wrds_factors: pd.DataFrame, static_factors: pd.DataFra
 def compare_regression_results(
     wrds_result: FF3RegressionResult,
     static_result: FF3RegressionResult,
-) -> dict[str, float | int]:
+) -> RegressionDeltas:
     """Compute deltas between WRDS-driven and static-driven FF3 regressions.
 
     Inputs:
@@ -111,9 +140,9 @@ def compare_regression_results(
 
 def evaluate_similarity(
     factor_metrics: pd.DataFrame,
-    regression_deltas: dict[str, float | int],
+    regression_deltas: RegressionDeltas,
     thresholds: ComparisonThresholds,
-) -> dict[str, Any]:
+) -> SimilarityGate:
     """Evaluate balanced pass/fail criteria for WRDS-vs-static comparability.
 
     Inputs:
@@ -144,19 +173,26 @@ def evaluate_similarity(
     if not bad_mad.empty:
         reasons.extend([f"mad_above_threshold:{idx}" for idx in bad_mad.index])
 
-    if float(regression_deltas["abs_delta_beta_mkt"]) > thresholds.delta_beta_max:
+    if regression_deltas["abs_delta_beta_mkt"] > thresholds.delta_beta_max:
         reasons.append("delta_beta_mkt_above_threshold")
-    if float(regression_deltas["abs_delta_beta_smb"]) > thresholds.delta_beta_max:
+    if regression_deltas["abs_delta_beta_smb"] > thresholds.delta_beta_max:
         reasons.append("delta_beta_smb_above_threshold")
-    if float(regression_deltas["abs_delta_beta_hml"]) > thresholds.delta_beta_max:
+    if regression_deltas["abs_delta_beta_hml"] > thresholds.delta_beta_max:
         reasons.append("delta_beta_hml_above_threshold")
-    if float(regression_deltas["abs_delta_alpha_bps"]) > thresholds.delta_alpha_max_bps:
+    if regression_deltas["abs_delta_alpha_bps"] > thresholds.delta_alpha_max_bps:
         reasons.append("delta_alpha_above_threshold")
-    if float(regression_deltas["abs_delta_r2"]) > thresholds.delta_r2_max:
+    if regression_deltas["abs_delta_r2"] > thresholds.delta_r2_max:
         reasons.append("delta_r2_above_threshold")
 
+    thresholds_dict = {
+        "corr_min": thresholds.corr_min,
+        "mad_max_bps": thresholds.mad_max_bps,
+        "delta_beta_max": thresholds.delta_beta_max,
+        "delta_alpha_max_bps": thresholds.delta_alpha_max_bps,
+        "delta_r2_max": thresholds.delta_r2_max,
+    }
     return {
         "passed": len(reasons) == 0,
         "reason_codes": reasons,
-        "thresholds": asdict(thresholds),
+        "thresholds": thresholds_dict,
     }

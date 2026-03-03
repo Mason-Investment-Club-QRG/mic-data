@@ -2,25 +2,33 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 import pandas as pd
 import yaml
 
 from mic_data.models.comparison import (
     ComparisonThresholds,
+    RegressionDeltas,
     compare_factor_inputs,
     compare_regression_results,
     evaluate_similarity,
 )
+from mic_data.models.constants import CANONICAL_FREQUENCY, ModelFrequency
 from mic_data.models.factors.static_csv_source import StaticCsvFactorSource
 from mic_data.models.factors.wrds_source import WrdsFactorSource
 from mic_data.models.interfaces import FactorSource, PortfolioReturnSource
 from mic_data.models.portfolio_returns import YFinancePortfolioReturnSource
-from mic_data.models.regression import FF3RegressionResult, run_ff3_regression
+from mic_data.models.regression import run_ff3_regression
+
+
+DEFAULT_START_DATE = "2000-01-01"
+DEFAULT_END_DATE = date.today().isoformat()
+DEFAULT_ALLOW_FALLBACK = True
 
 
 @dataclass(frozen=True)
@@ -48,16 +56,16 @@ class FF3PipelineConfig:
       - Dates and returns are interpreted by downstream modules as monthly decimal returns.
     """
 
-    start_date: str = "2000-01-01"
-    end_date: str = date.today().isoformat()
-    frequency: str = "M"
+    start_date: str = DEFAULT_START_DATE
+    end_date: str = DEFAULT_END_DATE
+    frequency: ModelFrequency = CANONICAL_FREQUENCY
     holdings_path: Path = Path("data/processed/holdings_latest.csv")
     static_factor_path: Path = Path("data/raw/factors/F-F_Research_Data_Factors.csv")
     processed_model_inputs_dir: Path = Path("data/processed/model_inputs")
     validation_output_dir: Path = Path("outputs/validation")
     logs_dir: Path = Path("outputs/logs")
     wrds_username: str | None = None
-    allow_fallback: bool = True
+    allow_fallback: bool = DEFAULT_ALLOW_FALLBACK
 
 
 @dataclass(frozen=True)
@@ -94,9 +102,9 @@ class JsonlRunLogger:
         error_type: str | None = None,
         error_message: str | None = None,
         fallback_used: bool = False,
-        extra: dict[str, Any] | None = None,
+        extra: Mapping[str, object] | None = None,
     ) -> None:
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "timestamp_utc": datetime.now(UTC).isoformat(),
             "stage": stage,
             "source": source,
@@ -120,9 +128,72 @@ class JsonlRunLogger:
 class _RunState:
     static_factors: pd.DataFrame | None
     wrds_factors: pd.DataFrame | None
-    static_regression: FF3RegressionResult | None
-    wrds_regression: FF3RegressionResult | None
     used_fallback: bool
+
+
+class _FactorMetricsPayload(TypedDict):
+    factor: str
+    corr: float
+    mad_bps: float
+    rmse_bps: float
+    n_obs: int
+
+
+def _thresholds_payload(thresholds: ComparisonThresholds) -> dict[str, float]:
+    return {
+        "corr_min": thresholds.corr_min,
+        "mad_max_bps": thresholds.mad_max_bps,
+        "delta_beta_max": thresholds.delta_beta_max,
+        "delta_alpha_max_bps": thresholds.delta_alpha_max_bps,
+        "delta_r2_max": thresholds.delta_r2_max,
+    }
+
+
+def _factor_metrics_records(factor_metrics: pd.DataFrame) -> list[_FactorMetricsPayload]:
+    records: list[_FactorMetricsPayload] = []
+    for factor, row in factor_metrics.iterrows():
+        records.append(
+            {
+                "factor": str(factor),
+                "corr": float(row["corr"]),
+                "mad_bps": float(row["mad_bps"]),
+                "rmse_bps": float(row["rmse_bps"]),
+                "n_obs": int(row["n_obs"]),
+            }
+        )
+    return records
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _get_string(mapping: Mapping[str, object], key: str, default: str) -> str:
+    value = mapping.get(key)
+    return value if isinstance(value, str) else default
+
+
+def _get_optional_string(mapping: Mapping[str, object], key: str) -> str | None:
+    value = mapping.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _get_path(mapping: Mapping[str, object], key: str, default: Path) -> Path:
+    value = mapping.get(key)
+    return Path(value) if isinstance(value, str) else default
+
+
+def _get_bool(mapping: Mapping[str, object], key: str, default: bool) -> bool:
+    value = mapping.get(key)
+    return value if isinstance(value, bool) else default
+
+
+def _parse_frequency(raw_frequency: str) -> ModelFrequency:
+    if raw_frequency != CANONICAL_FREQUENCY:
+        raise ValueError(
+            f"Unsupported frequency '{raw_frequency}'. Only '{CANONICAL_FREQUENCY}' is allowed."
+        )
+    return CANONICAL_FREQUENCY
 
 
 def load_ff3_pipeline_config(path: str | Path) -> FF3PipelineConfig:
@@ -151,30 +222,46 @@ def load_ff3_pipeline_config(path: str | Path) -> FF3PipelineConfig:
     if not isinstance(raw, dict):
         raise ValueError("FF3 config YAML root must be a mapping.")
 
-    run = raw.get("run", {})
-    sources = raw.get("sources", {})
-    outputs = raw.get("outputs", {})
-    options = raw.get("options", {})
+    run = _as_mapping(raw.get("run", {}))
+    sources = _as_mapping(raw.get("sources", {}))
+    outputs = _as_mapping(raw.get("outputs", {}))
+    options = _as_mapping(raw.get("options", {}))
+
+    frequency = _parse_frequency(
+        _get_string(run, "frequency", CANONICAL_FREQUENCY),
+    )
 
     return FF3PipelineConfig(
-        start_date=run.get("start_date", FF3PipelineConfig.start_date),
-        end_date=run.get("end_date", FF3PipelineConfig.end_date),
-        frequency=run.get("frequency", FF3PipelineConfig.frequency),
-        holdings_path=Path(sources.get("holdings_path", FF3PipelineConfig.holdings_path)),
-        static_factor_path=Path(
-            sources.get("static_factor_path", FF3PipelineConfig.static_factor_path)
+        start_date=_get_string(run, "start_date", DEFAULT_START_DATE),
+        end_date=_get_string(run, "end_date", DEFAULT_END_DATE),
+        frequency=frequency,
+        holdings_path=_get_path(
+            sources,
+            "holdings_path",
+            Path("data/processed/holdings_latest.csv"),
         ),
-        processed_model_inputs_dir=Path(
-            outputs.get(
-                "processed_model_inputs_dir", FF3PipelineConfig.processed_model_inputs_dir
-            )
+        static_factor_path=_get_path(
+            sources,
+            "static_factor_path",
+            Path("data/raw/factors/F-F_Research_Data_Factors.csv"),
         ),
-        validation_output_dir=Path(
-            outputs.get("validation_output_dir", FF3PipelineConfig.validation_output_dir)
+        processed_model_inputs_dir=_get_path(
+            outputs,
+            "processed_model_inputs_dir",
+            Path("data/processed/model_inputs"),
         ),
-        logs_dir=Path(outputs.get("logs_dir", FF3PipelineConfig.logs_dir)),
-        wrds_username=sources.get("wrds_username", FF3PipelineConfig.wrds_username),
-        allow_fallback=bool(options.get("allow_fallback", FF3PipelineConfig.allow_fallback)),
+        validation_output_dir=_get_path(
+            outputs,
+            "validation_output_dir",
+            Path("outputs/validation"),
+        ),
+        logs_dir=_get_path(outputs, "logs_dir", Path("outputs/logs")),
+        wrds_username=_get_optional_string(sources, "wrds_username"),
+        allow_fallback=_get_bool(
+            options,
+            "allow_fallback",
+            DEFAULT_ALLOW_FALLBACK,
+        ),
     )
 
 
@@ -203,7 +290,7 @@ def run_ff3_pipeline(
     Notes on units:
       - All return/factor values are decimal returns in monthly frequency.
     """
-    if config.frequency != "M":
+    if config.frequency != CANONICAL_FREQUENCY:
         raise ValueError("FF3 pipeline currently supports monthly frequency only ('M').")
 
     thresholds = thresholds or ComparisonThresholds()
@@ -259,7 +346,7 @@ def run_ff3_pipeline(
     regression_comparison_json = config.validation_output_dir / "ff3_regression_comparison.json"
     validation_summary_md = config.validation_output_dir / "ff3_validation_summary.md"
 
-    summary_payload: dict[str, Any] = {
+    summary_payload: dict[str, object] = {
         "config": {
             "start_date": config.start_date,
             "end_date": config.end_date,
@@ -268,22 +355,27 @@ def run_ff3_pipeline(
         },
         "wrds_available": run_state.wrds_factors is not None,
         "fallback_used": run_state.used_fallback,
-        "thresholds": thresholds.__dict__,
+        "thresholds": _thresholds_payload(thresholds),
     }
+    gate_passed = False
 
     if run_state.wrds_factors is not None and run_state.static_factors is not None:
         factor_metrics = compare_factor_inputs(run_state.wrds_factors, run_state.static_factors)
         factor_metrics.to_csv(factor_comparison_csv)
 
-        regression_deltas = compare_regression_results(
+        assert wrds_regression is not None
+        assert static_regression is not None
+        regression_deltas: RegressionDeltas = compare_regression_results(
             wrds_regression,
             static_regression,
         )
         gate = evaluate_similarity(factor_metrics, regression_deltas, thresholds)
+        gate_passed = gate["passed"]
+        factor_records = _factor_metrics_records(factor_metrics)
 
         summary_payload.update(
             {
-                "factor_metrics": factor_metrics.reset_index().to_dict(orient="records"),
+                "factor_metrics": factor_records,
                 "regression_deltas": regression_deltas,
                 "gate": gate,
                 "wrds_regression": wrds_regression.to_dict(),
@@ -303,7 +395,7 @@ def run_ff3_pipeline(
                 "gate": {
                     "passed": False,
                     "reason_codes": ["comparison_skipped_missing_source"],
-                    "thresholds": thresholds.__dict__,
+                    "thresholds": _thresholds_payload(thresholds),
                 },
                 "wrds_regression": wrds_regression.to_dict() if wrds_regression else None,
                 "static_regression": (
@@ -334,7 +426,7 @@ def run_ff3_pipeline(
         fallback_used=run_state.used_fallback,
         extra={
             "wrds_available": run_state.wrds_factors is not None,
-            "validation_passed": bool(summary_payload.get("gate", {}).get("passed", False)),
+            "validation_passed": gate_passed,
         },
     )
 
@@ -464,8 +556,6 @@ def _load_factor_sources(
     return _RunState(
         static_factors=static_factors,
         wrds_factors=wrds_factors,
-        static_regression=None,
-        wrds_regression=None,
         used_fallback=used_fallback,
     )
 
@@ -484,21 +574,28 @@ def _write_parquet(df: pd.DataFrame, path: Path) -> None:
 def _write_validation_summary(
     *,
     path: Path,
-    summary_payload: dict[str, Any],
+    summary_payload: Mapping[str, object],
     static_factors_path: Path | None,
     wrds_factors_path: Path | None,
     factor_comparison_csv: Path,
     regression_comparison_json: Path,
     log_path: Path,
 ) -> None:
-    gate = summary_payload.get("gate", {})
+    gate_obj = summary_payload.get("gate", {})
+    gate = gate_obj if isinstance(gate_obj, Mapping) else {}
+    reason_codes_obj = gate.get("reason_codes", [])
+    reason_codes_list = (
+        [str(code) for code in reason_codes_obj]
+        if isinstance(reason_codes_obj, list)
+        else []
+    )
     lines = [
         "# FF3 Validation Summary",
         "",
         f"- WRDS available: {summary_payload.get('wrds_available')}",
         f"- Fallback used: {summary_payload.get('fallback_used')}",
         f"- Validation passed: {gate.get('passed')}",
-        f"- Reason codes: {', '.join(gate.get('reason_codes', [])) or 'none'}",
+        f"- Reason codes: {', '.join(reason_codes_list) or 'none'}",
         "",
         "## Artifacts",
         f"- Static factors parquet: {static_factors_path}",
@@ -509,7 +606,13 @@ def _write_validation_summary(
         "",
     ]
 
-    if summary_payload.get("factor_metrics"):
+    factor_metrics_obj = summary_payload.get("factor_metrics")
+    factor_metrics = (
+        factor_metrics_obj
+        if isinstance(factor_metrics_obj, list)
+        else []
+    )
+    if factor_metrics:
         lines.extend(
             [
                 "## Factor Metrics",
@@ -518,10 +621,16 @@ def _write_validation_summary(
                 "|---|---:|---:|---:|---:|",
             ]
         )
-        for row in summary_payload["factor_metrics"]:
+        for row in factor_metrics:
+            if not isinstance(row, Mapping):
+                continue
             lines.append(
                 "| {factor} | {corr:.6f} | {mad_bps:.4f} | {rmse_bps:.4f} | {n_obs} |".format(
-                    **row
+                    factor=row.get("factor", "unknown"),
+                    corr=float(row.get("corr", 0.0)),
+                    mad_bps=float(row.get("mad_bps", 0.0)),
+                    rmse_bps=float(row.get("rmse_bps", 0.0)),
+                    n_obs=int(row.get("n_obs", 0)),
                 )
             )
         lines.append("")

@@ -54,7 +54,7 @@ def run_ff3_regression(
     series = pd.to_numeric(portfolio_returns.copy(), errors="coerce").astype("float64")
     series.name = "portfolio_return"
     factors_numeric = (
-        factors[FACTOR_COLUMNS]
+        factors[list(FACTOR_COLUMNS)]
         .apply(lambda col: pd.to_numeric(col, errors="coerce"))
         .astype("float64")
     )

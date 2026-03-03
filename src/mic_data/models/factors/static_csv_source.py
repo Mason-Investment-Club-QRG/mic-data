@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import pandas as pd
 
-from mic_data.models.constants import FACTOR_COLUMNS
+from mic_data.models.constants import FACTOR_COLUMNS, ModelFrequency
 from mic_data.models.interfaces import FactorSource
 
 
@@ -35,7 +34,7 @@ class StaticCsvFactorSource(FactorSource):
         self,
         start_date: str,
         end_date: str,
-        frequency: Literal["M"] = "M",
+        frequency: ModelFrequency = "M",
     ) -> pd.DataFrame:
         """Load and normalize static FF3 factors.
 

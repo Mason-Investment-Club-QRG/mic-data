@@ -4,12 +4,16 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from mic_data.models.factors.static_csv_source import StaticCsvFactorSource
+
+if TYPE_CHECKING:
+    from mic_data.models.constants import ModelFrequency
 
 
 class TestStaticCsvFactorSource(unittest.TestCase):
@@ -43,7 +47,11 @@ class TestStaticCsvFactorSource(unittest.TestCase):
             )
             source = StaticCsvFactorSource(csv_path=p)
             with self.assertRaises(ValueError):
-                source.load_factors("2020-01-01", "2020-12-31", "D")
+                if TYPE_CHECKING:
+                    invalid_frequency: ModelFrequency = "M"
+                else:
+                    invalid_frequency = "D"
+                source.load_factors("2020-01-01", "2020-12-31", invalid_frequency)
 
 
 if __name__ == "__main__":

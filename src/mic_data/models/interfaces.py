@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Literal
 
 import pandas as pd
+
+from mic_data.models.constants import ModelFrequency
 
 
 class FactorSource(ABC):
@@ -30,7 +31,7 @@ class FactorSource(ABC):
         self,
         start_date: str,
         end_date: str,
-        frequency: Literal["M"] = "M",
+        frequency: ModelFrequency = "M",
     ) -> pd.DataFrame:
         raise NotImplementedError
 
@@ -59,6 +60,6 @@ class PortfolioReturnSource(ABC):
         self,
         start_date: str,
         end_date: str,
-        frequency: Literal["M"] = "M",
+        frequency: ModelFrequency = "M",
     ) -> pd.Series:
         raise NotImplementedError

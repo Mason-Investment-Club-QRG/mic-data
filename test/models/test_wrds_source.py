@@ -16,7 +16,7 @@ class _FakeConn:
         self.frame = frame
         self.closed = False
 
-    def raw_sql(self, query: str, date_cols: list[str]) -> pd.DataFrame:
+    def raw_sql(self, query: str, date_cols: list[str] | None = None) -> pd.DataFrame:
         _ = query
         _ = date_cols
         return self.frame.copy()
@@ -46,8 +46,8 @@ class TestWrdsFactorSource(unittest.TestCase):
 
         conn = _FakeConn(daily)
 
-        def fake_factory(**kwargs):
-            _ = kwargs
+        def fake_factory(*, wrds_username: str | None = None) -> _FakeConn:
+            _ = wrds_username
             return conn
 
         source = WrdsFactorSource(username="user", connection_factory=fake_factory)
@@ -65,7 +65,11 @@ class TestWrdsFactorSource(unittest.TestCase):
     def test_raises_when_empty(self) -> None:
         conn = _FakeConn(pd.DataFrame(columns=["date", "mktrf", "smb", "hml", "rf"]))
 
-        source = WrdsFactorSource(connection_factory=lambda **kwargs: conn)
+        def fake_factory(*, wrds_username: str | None = None) -> _FakeConn:
+            _ = wrds_username
+            return conn
+
+        source = WrdsFactorSource(connection_factory=fake_factory)
         with self.assertRaises(ValueError):
             source.load_factors("2020-01-01", "2020-12-31", "M")
 

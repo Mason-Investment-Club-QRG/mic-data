@@ -2,12 +2,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Protocol
 
 import pandas as pd
 import yfinance as yf
 
+from mic_data.models.constants import ModelFrequency
 from mic_data.models.interfaces import PortfolioReturnSource
+
+
+class YFDownloadFn(Protocol):
+    """Callable signature used for yfinance history pulls."""
+
+    def __call__(
+        self,
+        tickers: list[str],
+        *,
+        start: str,
+        end: str,
+        interval: str,
+        auto_adjust: bool,
+        progress: bool,
+    ) -> pd.DataFrame | None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -31,13 +48,13 @@ class YFinancePortfolioReturnSource(PortfolioReturnSource):
     """
 
     holdings_path: Path = Path("data/processed/holdings_latest.csv")
-    yf_download: Callable[..., Any] | None = None
+    yf_download: YFDownloadFn | None = None
 
     def load_portfolio_returns(
         self,
         start_date: str,
         end_date: str,
-        frequency: Literal["M"] = "M",
+        frequency: ModelFrequency = "M",
     ) -> pd.Series:
         """Load monthly portfolio returns for FF3 regression.
 
@@ -73,16 +90,26 @@ class YFinancePortfolioReturnSource(PortfolioReturnSource):
             progress=False,
         )
 
-        if raw is None or getattr(raw, "empty", True):
+        if raw is None or raw.empty:
             raise RuntimeError("yfinance returned no data for portfolio return calculation.")
 
-        close = raw["Close"]
-        if isinstance(close, pd.Series):
-            close = close.to_frame(name=tickers[0])
+        close_obj = raw.get("Close")
+        if close_obj is None:
+            raise RuntimeError("yfinance output is missing expected 'Close' data.")
+
+        if isinstance(close_obj, pd.Series):
+            close = close_obj.to_frame(name=tickers[0])
+        elif isinstance(close_obj, pd.DataFrame):
+            close = close_obj.copy()
+        else:
+            raise RuntimeError("yfinance returned unsupported 'Close' data structure.")
+
+        close = close.apply(lambda col: pd.to_numeric(col, errors="coerce")).astype("float64")
 
         close.index = pd.to_datetime(close.index)
         # Normalize to month-end labels so all sources align on the same calendar index.
-        close.index = close.index.to_period("M").to_timestamp("M")
+        close_idx = pd.DatetimeIndex(close.index)
+        close.index = close_idx.to_period("M").to_timestamp("M")
         close = close.groupby(level=0).last().sort_index()
 
         asset_returns = close.pct_change().dropna(how="all")
@@ -94,8 +121,10 @@ class YFinancePortfolioReturnSource(PortfolioReturnSource):
 
         start_period = pd.Timestamp(start_date).to_period("M")
         end_period = pd.Timestamp(end_date).to_period("M")
-        mask = (portfolio_returns.index.to_period("M") >= start_period) & (
-            portfolio_returns.index.to_period("M") <= end_period
+        portfolio_idx = pd.DatetimeIndex(portfolio_returns.index)
+        portfolio_period = portfolio_idx.to_period("M")
+        mask = (portfolio_period >= start_period) & (
+            portfolio_period <= end_period
         )
         portfolio_returns = portfolio_returns.loc[mask].dropna()
 
@@ -122,7 +151,7 @@ class YFinancePortfolioReturnSource(PortfolioReturnSource):
 
         holdings = holdings.copy()
         holdings["ticker"] = holdings["ticker"].astype(str).str.strip().str.upper()
-        holdings["weight"] = pd.to_numeric(holdings["weight"], errors="raise")
+        holdings["weight"] = pd.to_numeric(holdings["weight"], errors="raise").astype("float64")
 
         weights = holdings.set_index("ticker")["weight"]
         total = float(weights.sum())

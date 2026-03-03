@@ -11,6 +11,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from mic_data.models.constants import ModelFrequency
 from mic_data.models.comparison import ComparisonThresholds
 from mic_data.models.interfaces import FactorSource, PortfolioReturnSource
 from mic_data.models.runner import FF3PipelineConfig, run_ff3_pipeline
@@ -20,7 +21,12 @@ class _StaticSource(FactorSource):
     def __init__(self, frame: pd.DataFrame) -> None:
         self.frame = frame
 
-    def load_factors(self, start_date: str, end_date: str, frequency: str = "M") -> pd.DataFrame:
+    def load_factors(
+        self,
+        start_date: str,
+        end_date: str,
+        frequency: ModelFrequency = "M",
+    ) -> pd.DataFrame:
         _ = start_date
         _ = end_date
         _ = frequency
@@ -28,7 +34,12 @@ class _StaticSource(FactorSource):
 
 
 class _FailingSource(FactorSource):
-    def load_factors(self, start_date: str, end_date: str, frequency: str = "M") -> pd.DataFrame:
+    def load_factors(
+        self,
+        start_date: str,
+        end_date: str,
+        frequency: ModelFrequency = "M",
+    ) -> pd.DataFrame:
         _ = start_date
         _ = end_date
         _ = frequency
@@ -40,7 +51,10 @@ class _PortfolioSource(PortfolioReturnSource):
         self.series = series
 
     def load_portfolio_returns(
-        self, start_date: str, end_date: str, frequency: str = "M"
+        self,
+        start_date: str,
+        end_date: str,
+        frequency: ModelFrequency = "M",
     ) -> pd.Series:
         _ = start_date
         _ = end_date
