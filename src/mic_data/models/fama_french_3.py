@@ -1,94 +1,84 @@
-import pandas as pd
-import numpy as np
-import yfinance as yf
-import statsmodels.api as sm
-from datetime import datetime
-import os
+from __future__ import annotations
+
+import argparse
+from dataclasses import replace
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-FF_PATH = PROJECT_ROOT / "data" / "raw" / "factors" / "F-F_Research_Data_Factors.csv"
-
-# # Defining static portfolio weights for MIC portfolio
-# weights = {
-#     "AMD": 0.0956,
-#     "AXP": 0.1060,
-#     "COST": 0.1314,
-#     "CPNG": 0.0291,
-#     "DUK": 0.0480,
-#     "EHC": 0.0519,
-#     "GE": 0.0632,
-#     "GEHC": 0.0582,
-#     "PM": 0.0720,
-#     "QCOM": 0.0450,
-#     "SPGI": 0.0576,
-#     "TMUS": 0.0712,
-#     "UNH": 0.0363,
-#     "WCN": 0.0832,
-#     "XYL": 0.0513,
-# }
-
-holdings = pd.read_csv("data/processed/holdings_latest.csv")
-weights = holdings.set_index("ticker")["weight"]
-tickers = weights.index.tolist()
-
-assert abs(weights.sum() - 1) < 1e-6, "Weights must sum to 1"
-
-
-# Download historical price data for the past 5 years
-end_date = datetime.today()
-start_date = end_date - pd.DateOffset(years=5)
-
-
-raw = yf.download(
-    tickers,
-    start=start_date,
-    end=end_date,
-    interval="1mo",
-    auto_adjust=True,
-    progress=False,
+from mic_data.models.runner import (
+    FF3PipelineConfig,
+    load_ff3_pipeline_config,
+    run_ff3_pipeline,
 )
-if raw is None:
-    raise RuntimeError("yfinance.download returned None")
-prices = raw["Close"]
-
-# Drop empty rows
-prices = prices.dropna(how="all")
-
-# Calculate monthly returns
-asset_returns = prices.pct_change().dropna()
-
-# Calculate static portfolio returns
-portfolio_returns: pd.Series[float] = asset_returns.mul(weights, axis=1).sum(axis=1)  # type: ignore
-portfolio_returns.name = "Portfolio_Return"
-
-# Load and clean up Fama-French three-factor data
-if not FF_PATH.exists():
-    raise FileNotFoundError(f"Fama-French file not found at {FF_PATH}")
-
-ff_raw = pd.read_csv(FF_PATH, skiprows=3)
-
-ff_filtered = ff_raw[ff_raw.iloc[:, 0].astype(str).str.match(r"^\d{6}$")]
 
 
-ff_filtered.rename(columns={ff_filtered.columns[0]: "Date"}, inplace=True)
-ff_filtered["Date"] = pd.to_datetime(ff_filtered["Date"], format="%Y%m")
-ff_filtered.set_index("Date", inplace=True)
+def build_parser() -> argparse.ArgumentParser:
+    """Build CLI parser for the FF3 pipeline runner."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run WRDS-first FF3 pipeline with static fallback and A/B validation artifacts."
+        )
+    )
+    parser.add_argument(
+        "--config",
+        default="config/ff3_pipeline.yaml",
+        help="YAML config path. If missing, internal defaults are used.",
+    )
+    parser.add_argument("--start-date", help="Override start date (YYYY-MM-DD).")
+    parser.add_argument("--end-date", help="Override end date (YYYY-MM-DD).")
+    parser.add_argument(
+        "--wrds-username",
+        help="Optional WRDS username override (otherwise use WRDS_USERNAME env var).",
+    )
+    parser.add_argument(
+        "--no-fallback",
+        action="store_true",
+        help="Disable static fallback when WRDS pull fails.",
+    )
+    return parser
 
-ff_filtered = ff_filtered.apply(pd.to_numeric, errors="coerce").dropna()
 
-ff = ff_filtered / 100
-print(ff.head())
-print(ff.tail())
+def main() -> None:
+    """CLI entry point for FF3 run + validation artifacts.
 
-# Merge portfolio returns with Fama-French data
-data = pd.concat([portfolio_returns, ff], axis=1, join="inner")
-data["Excess_Return"] = data["Portfolio_Return"] - data["RF"]
-regression_data = data[["Excess_Return", "Mkt-RF", "SMB", "HML"]]
+    Inputs:
+      - CLI flags from build_parser().
 
-# Perform the Fama-French three-factor regression
-X = sm.add_constant(regression_data[["Mkt-RF", "SMB", "HML"]])
-y = regression_data["Excess_Return"]
+    Returns:
+      - None. Prints artifact locations and run status.
 
-model = sm.OLS(y, X).fit()
-print(model.summary())
+    Raises:
+      - Any pipeline exception if both data sources fail or artifacts cannot be written.
+
+    Notes on units:
+      - This runner operates on monthly decimal returns.
+    """
+    args = build_parser().parse_args()
+
+    config_path = Path(args.config)
+    if config_path.exists():
+        config = load_ff3_pipeline_config(config_path)
+    else:
+        config = FF3PipelineConfig()
+
+    if args.start_date:
+        config = replace(config, start_date=args.start_date)
+    if args.end_date:
+        config = replace(config, end_date=args.end_date)
+    if args.wrds_username:
+        config = replace(config, wrds_username=args.wrds_username)
+    if args.no_fallback:
+        config = replace(config, allow_fallback=False)
+
+    artifacts = run_ff3_pipeline(config)
+
+    print("FF3 pipeline completed.")
+    print(f"WRDS available: {artifacts.wrds_available}")
+    print(f"Fallback used: {artifacts.used_fallback}")
+    print(f"Run log: {artifacts.log_path}")
+    print(f"Factor comparison CSV: {artifacts.factor_comparison_csv}")
+    print(f"Regression comparison JSON: {artifacts.regression_comparison_json}")
+    print(f"Validation summary: {artifacts.validation_summary_md}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,18 @@
+run:
+  start_date: "2000-01-01"
+  end_date: "2025-12-31"
+  frequency: "M"
+
+sources:
+  holdings_path: "data/processed/holdings_latest.csv"
+  static_factor_path: "data/raw/factors/F-F_Research_Data_Factors.csv"
+  # Optional explicit username. If omitted, WRDS_USERNAME env var is used.
+  wrds_username: null
+
+outputs:
+  processed_model_inputs_dir: "data/processed/model_inputs"
+  validation_output_dir: "outputs/validation"
+  logs_dir: "outputs/logs"
+
+options:
+  allow_fallback: true
