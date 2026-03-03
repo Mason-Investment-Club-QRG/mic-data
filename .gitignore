@@ -20,4 +20,6 @@ outputs/**
 secrets/*
 scripts/env.sh
 diff.txt
-test/
+test/*
+!test/models/
+!test/models/*.py

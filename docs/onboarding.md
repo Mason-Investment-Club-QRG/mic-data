@@ -1,8 +1,10 @@
 # Onboarding
 
 ## What this repo does
-- Produces clean tables for prices, holdings, macro data
-- Exports small CSV summaries for dashboards (Google Sheets / Excel / BI)
+- Syncs current positions from Google Sheets
+- Builds latest holdings weights from market prices
+- Runs FF3 regression with WRDS-first factor pulls and static fallback
+- Writes validation artifacts comparing WRDS vs static factor inputs
 
 ## Quickstart
 
@@ -26,23 +28,27 @@ pip install -r requirements.txt
 
 ### 3) Set secrets (do NOT commit)
 
-Create a `.env` file in the repo root:
+Create a `.env` file in the repo root and export service-account credentials:
 
 ```bash
 cat > .env <<'EOF'
 FRED_API_KEY=your_key_here
 EOF
+
+source scripts/env.sh
 ```
 
-### 4) Configure tickers + settings
+### 4) Configure data + model settings
 
 Edit:
 
-* `config/universe.csv`
-* `config/settings.yaml`
+* `config/positions.yaml`
+* `config/ff3_pipeline.yaml`
 
 ### 5) Run the pipeline
 
-Pipeline not implemented yet.
 ```bash
+PYTHONPATH=src python -m mic_data.positions.sync
+PYTHONPATH=src python -m mic_data.portfolio.holdings
+PYTHONPATH=src python -m mic_data.models.fama_french_3
 ```
