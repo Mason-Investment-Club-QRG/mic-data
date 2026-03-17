@@ -83,6 +83,60 @@ Status values:
 - `error`
 - `warn` (reserved for future use)
 
+## `benchmark_comparison`
+Purpose: aligned portfolio proxy and benchmark return series with cumulative value and drawdown fields.
+
+Columns:
+- `trade_date` (`datetime64[ns]`, non-null)
+- `portfolio_ret` (`float64`, nullable)
+- `benchmark_ret` (`float64`, nullable)
+- `active_ret` (`float64`, nullable)
+- `portfolio_value` (`float64`, non-null; base 100 curve)
+- `benchmark_value` (`float64`, non-null; base 100 curve)
+- `portfolio_drawdown` (`float64`, nullable)
+- `benchmark_drawdown` (`float64`, nullable)
+- `n_constituents` (`int64`, non-null)
+- `gross_exposure` (`float64`, non-null)
+- `method` (`string`, non-null)
+
+## `current_holdings_snapshot`
+Purpose: latest holdings composition with current weights from persisted prices and CRSP size fields.
+
+Columns:
+- `as_of_date` (`datetime64[ns]`, non-null)
+- `latest_trade_date` (`datetime64[ns]`, non-null)
+- `ticker` (`string`, non-null)
+- `name` (`string`, nullable)
+- `sector` (`string`, nullable)
+- `shares` (`float64`, non-null)
+- `latest_price` (`float64`, non-null)
+- `latest_market_cap_usd` (`float64`, non-null)
+- `market_cap_bucket` (`string`, non-null)
+- `position_value` (`float64`, non-null)
+- `portfolio_weight` (`float64`, non-null)
+- `portfolio_weight_pct` (`float64`, non-null)
+- `weight_rank` (`int64`, non-null)
+
+## `market_cap_mix`
+Purpose: market-cap bucket aggregation of the current holdings snapshot.
+
+Columns:
+- `market_cap_bucket` (`string`, non-null)
+- `bucket_order` (`int64`, non-null)
+- `constituent_count` (`int64`, non-null)
+- `portfolio_weight` (`float64`, non-null)
+- `portfolio_weight_pct` (`float64`, non-null)
+- `position_value` (`float64`, non-null)
+
+## `beta_regression`
+Purpose: sampled benchmark and portfolio proxy return pairs used for the beta regression chart.
+
+Columns:
+- `trade_date` (`datetime64[ns]`, non-null)
+- `portfolio_ret` (`float64`, nullable)
+- `benchmark_ret` (`float64`, nullable)
+- `fitted_portfolio_ret` (`float64`, nullable)
+
 ## Idempotency Contract
 - Deterministic sort before write.
 - Atomic file write (temp + replace).

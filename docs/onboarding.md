@@ -7,6 +7,7 @@
 - Aggregates daily portfolio returns.
 - Publishes daily outputs to Google Sheets.
 - Runs monthly FF3 model analysis.
+- Builds portfolio analytics tables and SVG charts from persisted outputs.
 
 ## Quickstart
 
@@ -52,6 +53,7 @@ set -a; source .env; set +a
 - `config/google_sheets.yaml`
 - `config/positions.yaml`
 - `config/returns_daily.yaml`
+- `config/analytics.yaml`
 
 ### 5) Run daily stages
 ```bash
@@ -77,7 +79,24 @@ PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
   --end-date 2025-12-31
 ```
 
+Portfolio analytics should also read the persisted daily outputs. Add `SPY` to the
+Google Sheets `Universe` tab first so the benchmark is present in
+`security_returns_daily`.
+
+Example:
+```bash
+PYTHONPATH=src .venv/bin/python -m mic_data.analytics.report \
+  --config config/analytics.yaml \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31
+```
+
 ### 7) Run tests
 ```bash
 PYTHONPATH=src .venv/bin/python -m unittest discover -s test/models -p 'test_*.py'
 ```
+
+## Analytics Limitation
+- Portfolio performance, beta, and Sharpe in the analytics layer are based on the
+  pipeline's `holdings_weighted_sum` proxy series.
+- The analytics outputs do not yet reflect historical portfolio composition changes.

@@ -9,6 +9,7 @@ Data engineering pipeline for Mason Investment Club with a WRDS-first modeling s
 - Aggregates daily portfolio returns from holdings weights.
 - Publishes curated daily outputs back to Google Sheets.
 - Runs FF3 analysis from persisted daily pipeline outputs plus WRDS factor data.
+- Builds benchmark/composition analytics tables and SVG charts from persisted outputs.
 
 ## Pipeline Architecture
 ### Daily Returns (stage-based, idempotent)
@@ -33,6 +34,19 @@ PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
   --output-json outputs/validation/ff3_summary_2025.json
 ```
 
+### Portfolio Analytics
+1. Add `SPY` to the Google Sheets `Universe` tab so it is included in `security_returns_daily`.
+2. Run the daily returns stages so the persisted datasets are current.
+3. Run `mic_data.analytics.report` against those persisted datasets.
+
+Example:
+```bash
+PYTHONPATH=src .venv/bin/python -m mic_data.analytics.report \
+  --config config/analytics.yaml \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31
+```
+
 ## Key Config Files
 - `config/google_sheets.yaml`
   - Single source of truth for sheet ID, input tabs, and output tabs.
@@ -40,6 +54,8 @@ PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
   - Holdings/watchlist column mappings and universe output locations.
 - `config/returns_daily.yaml`
   - Daily returns date window, source paths, output paths, and idempotency defaults.
+- `config/analytics.yaml`
+  - Benchmark ticker, beta frequency, analytics output paths, and chart settings.
 
 ## Setup
 ```bash
@@ -89,6 +105,14 @@ Force a one-off window without editing YAML:
 PYTHONPATH=src python -m mic_data.market.prices_daily run-all --config config/returns_daily.yaml --start-date 2026-02-28 --end-date 2026-03-03
 ```
 
+Run portfolio analytics after the daily refresh:
+```bash
+PYTHONPATH=src .venv/bin/python -m mic_data.analytics.report \
+  --config config/analytics.yaml \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31
+```
+
 ## Idempotency Rules
 - Natural keys:
   - `universe_daily`: `(as_of_date, ticker)`
@@ -117,6 +141,18 @@ PYTHONPATH=src python -m mic_data.market.prices_daily run-all --config config/re
 ### Monthly FF3
 - `data/processed/model_inputs/factors_wrds_m.parquet`
 
+### Analytics
+- `data/processed/analytics/benchmark_comparison.parquet`
+- `data/processed/analytics/current_holdings_snapshot.parquet`
+- `data/processed/analytics/market_cap_mix.parquet`
+- `data/processed/analytics/beta_regression.parquet`
+- `outputs/analytics/portfolio_dashboard_summary.json`
+- `outputs/charts/performance_vs_spy.svg`
+- `outputs/charts/beta_vs_spy.svg`
+- `outputs/charts/top_holdings.svg`
+- `outputs/charts/market_cap_mix.svg`
+- `outputs/charts/sharpe_ratio.svg`
+
 ## Tests
 ```bash
 PYTHONPATH=src .venv/bin/python -m unittest discover -s test/models -p 'test_*.py'
@@ -140,3 +176,8 @@ Automation behavior:
 Daily security returns use CRSP `ret`.
 - This is a decimal total return field.
 - Example: `0.01` means `+1.00%` for that day.
+
+## Important Note on Portfolio Analytics
+- Performance, beta, and Sharpe analytics use the pipeline's holdings-weighted proxy return series.
+- That means the current holdings snapshot is applied backward across the requested history.
+- Historical portfolio composition changes are not yet modeled.
