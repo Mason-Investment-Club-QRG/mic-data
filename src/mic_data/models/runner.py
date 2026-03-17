@@ -22,13 +22,13 @@ from mic_data.models.constants import CANONICAL_FREQUENCY, ModelFrequency
 from mic_data.models.factors.static_csv_source import StaticCsvFactorSource
 from mic_data.models.factors.wrds_source import WrdsFactorSource
 from mic_data.models.interfaces import FactorSource, PortfolioReturnSource
-from mic_data.models.portfolio_returns import YFinancePortfolioReturnSource
+from mic_data.models.portfolio_returns import PersistedPortfolioReturnSource
 from mic_data.models.regression import run_ff3_regression
 
 
 DEFAULT_START_DATE = "2000-01-01"
 DEFAULT_END_DATE = date.today().isoformat()
-DEFAULT_ALLOW_FALLBACK = True
+DEFAULT_ALLOW_FALLBACK = False
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class FF3PipelineConfig:
     Inputs:
       - start_date/end_date: Inclusive analysis window in YYYY-MM-DD.
       - frequency: Currently monthly only ("M").
-      - holdings_path: Path to holdings_latest CSV.
+      - portfolio_returns_path: Path to persisted daily portfolio returns.
       - static_factor_path: Path to local Ken French factor CSV.
       - processed_model_inputs_dir: Destination for factor parquet outputs.
       - validation_output_dir: Destination for diagnostics/report artifacts.
@@ -59,7 +59,7 @@ class FF3PipelineConfig:
     start_date: str = DEFAULT_START_DATE
     end_date: str = DEFAULT_END_DATE
     frequency: ModelFrequency = CANONICAL_FREQUENCY
-    holdings_path: Path = Path("data/processed/holdings_latest.csv")
+    portfolio_returns_path: Path = Path("data/processed/returns/portfolio_returns_daily.parquet")
     static_factor_path: Path = Path("data/raw/factors/F-F_Research_Data_Factors.csv")
     processed_model_inputs_dir: Path = Path("data/processed/model_inputs")
     validation_output_dir: Path = Path("outputs/validation")
@@ -235,10 +235,10 @@ def load_ff3_pipeline_config(path: str | Path) -> FF3PipelineConfig:
         start_date=_get_string(run, "start_date", DEFAULT_START_DATE),
         end_date=_get_string(run, "end_date", DEFAULT_END_DATE),
         frequency=frequency,
-        holdings_path=_get_path(
+        portfolio_returns_path=_get_path(
             sources,
-            "holdings_path",
-            Path("data/processed/holdings_latest.csv"),
+            "portfolio_returns_path",
+            Path("data/processed/returns/portfolio_returns_daily.parquet"),
         ),
         static_factor_path=_get_path(
             sources,
@@ -301,7 +301,9 @@ def run_ff3_pipeline(
 
     wrds_source = wrds_source or WrdsFactorSource(username=config.wrds_username)
     static_source = static_source or StaticCsvFactorSource(config.static_factor_path)
-    portfolio_source = portfolio_source or YFinancePortfolioReturnSource(config.holdings_path)
+    portfolio_source = portfolio_source or PersistedPortfolioReturnSource(
+        config.portfolio_returns_path
+    )
 
     portfolio_returns = _timed_load_portfolio(
         source=portfolio_source,

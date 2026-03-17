@@ -4,7 +4,7 @@ run:
   frequency: "M"
 
 sources:
-  holdings_path: "data/processed/holdings_latest.csv"
+  portfolio_returns_path: "data/processed/returns/portfolio_returns_daily.parquet"
   static_factor_path: "data/raw/factors/F-F_Research_Data_Factors.csv"
   # Optional explicit username. If omitted, WRDS_USERNAME env var is used.
   wrds_username: null
@@ -15,4 +15,4 @@ outputs:
   logs_dir: "outputs/logs"
 
 options:
-  allow_fallback: true
+  allow_fallback: false

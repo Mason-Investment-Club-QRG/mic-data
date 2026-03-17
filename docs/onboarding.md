@@ -53,7 +53,6 @@ set -a; source .env; set +a
 - `config/google_sheets.yaml`
 - `config/positions.yaml`
 - `config/returns_daily.yaml`
-- `config/ff3_pipeline.yaml`
 
 ### 5) Run daily stages
 ```bash
@@ -68,6 +67,9 @@ PYTHONPATH=src python -m mic_data.reporting.publish_sheets --config config/retur
 ```bash
 PYTHONPATH=src python -m mic_data.market.prices_daily run-all --config config/returns_daily.yaml
 ```
+
+Monthly FF3 analysis should read the persisted daily outputs from
+`mic_data.models.ff_factor_matrix` rather than pulling a second price source.
 
 ### 7) Run tests
 ```bash

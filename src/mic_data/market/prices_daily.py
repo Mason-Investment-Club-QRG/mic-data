@@ -8,17 +8,231 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 import pandas as pd
 import yaml
+from pandas.tseries.offsets import BDay
 
 # Purpose: Make package imports work when this file is executed directly by path.
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mic_data.contracts.daily_returns_contracts import DAILY_QA_KEY, QaRow, WriteMode, qa_row_to_frame, validate_daily_qa
+from mic_data.config.secrets import wrds_password, wrds_username
+from mic_data.contracts.daily_returns_contracts import (
+    DAILY_QA_KEY,
+    QaRow,
+    WriteMode,
+    qa_row_to_frame,
+    validate_daily_qa,
+    validate_security_returns_daily,
+    validate_universe_daily,
+)
+from mic_data.market.interfaces import DailyReturnSource
 from mic_data.utils.idempotent_io import atomic_write_parquet, write_manifest_json
+
+
+class WrdsConnection(Protocol):
+    """Minimal WRDS connection protocol required by this module."""
+
+    def raw_sql(self, query: str, date_cols: list[str] | None = None) -> pd.DataFrame:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+class WrdsConnectionFactory(Protocol):
+    """Factory protocol for dependency-injected WRDS connections."""
+
+    def __call__(self, *, wrds_username: str | None = None) -> WrdsConnection:
+        ...
+
+
+@dataclass(frozen=True)
+class LatestSecurityPrices:
+    """Latest persisted price snapshot used by holdings and downstream analytics."""
+
+    trade_date: pd.Timestamp
+    prices: pd.Series
+
+
+@dataclass(frozen=True)
+class WrdsCrspDailyReturnSource(DailyReturnSource):
+    """Load daily returns from WRDS CRSP."""
+
+    username: str | None = None
+    connection_factory: WrdsConnectionFactory | None = None
+
+    def load_security_returns(
+        self,
+        *,
+        universe: pd.DataFrame,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        universe_clean = validate_universe_daily(universe)
+        tickers = sorted(
+            {
+                str(ticker)
+                for ticker in universe_clean["ticker"].dropna().astype(str).tolist()
+                if str(ticker).strip()
+            }
+        )
+        if not tickers:
+            raise ValueError("Universe contains no tickers to query from WRDS.")
+
+        start_ts = pd.Timestamp(start_date)
+        end_ts = pd.Timestamp(end_date)
+        if end_ts < start_ts:
+            raise ValueError("end_date must be greater than or equal to start_date.")
+
+        query = self._build_query(
+            tickers=tickers,
+            start_date=start_ts.strftime("%Y-%m-%d"),
+            end_date=end_ts.strftime("%Y-%m-%d"),
+        )
+
+        conn: WrdsConnection | None = None
+        try:
+            conn = self._connect()
+            raw = conn.raw_sql(query, date_cols=["trade_date", "namedt", "nameenddt"])
+        except Exception as exc:  # pragma: no cover - external auth/runtime variance
+            raise RuntimeError(f"WRDS CRSP pull failed: {exc}") from exc
+        finally:
+            if conn is not None:
+                conn.close()
+
+        if raw.empty:
+            raise RuntimeError("WRDS returned no CRSP DSF rows for requested universe/date window.")
+
+        normalized = self._normalize_rows(raw)
+        return validate_security_returns_daily(normalized)
+
+    def _build_query(self, *, tickers: list[str], start_date: str, end_date: str) -> str:
+        requested_tickers = ", ".join(
+            [
+                f"('{self._escape_sql_literal(ticker)}')"
+                for ticker in self._normalize_requested_tickers(tickers)
+            ]
+        )
+        return f"""
+            WITH requested_tickers(input_ticker) AS (
+                VALUES {requested_tickers}
+            ),
+            security_name_history AS (
+                SELECT
+                    permno,
+                    namedt,
+                    COALESCE(nameenddt, DATE '9999-12-31') AS nameenddt,
+                    UPPER(TRIM(ticker)) AS match_ticker
+                FROM crsp.stocknames_v2
+                WHERE ticker IS NOT NULL
+                  AND TRIM(ticker) <> ''
+            )
+            SELECT
+                d.dlycaldt AS trade_date,
+                r.input_ticker AS ticker,
+                d.permno,
+                d.dlyret AS ret,
+                d.dlyprc AS prc,
+                d.dlyvol AS vol,
+                d.shrout,
+                n.namedt,
+                n.nameenddt
+            FROM crsp.dsf_v2 AS d
+            INNER JOIN security_name_history AS n
+                ON d.permno = n.permno
+               AND d.dlycaldt BETWEEN n.namedt AND n.nameenddt
+            INNER JOIN requested_tickers AS r
+                ON n.match_ticker = r.input_ticker
+            WHERE d.dlycaldt BETWEEN '{start_date}' AND '{end_date}'
+            ORDER BY d.dlycaldt, d.permno
+        """
+
+    def _escape_sql_literal(self, value: str) -> str:
+        return value.replace("'", "''")
+
+    def _normalize_requested_tickers(self, tickers: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for ticker in tickers:
+            candidate = str(ticker).strip().upper()
+            if candidate.startswith("^"):
+                candidate = candidate[1:]
+            if candidate:
+                normalized.append(candidate)
+
+        deduped = sorted(set(normalized))
+        if not deduped:
+            raise ValueError("Universe contains no usable tickers to query from WRDS.")
+        return deduped
+
+    def _normalize_rows(self, raw: pd.DataFrame) -> pd.DataFrame:
+        load_ts = pd.Timestamp.now(tz="UTC")
+
+        frame = raw.copy()
+        frame.columns = [str(col).strip().lower() for col in frame.columns]
+        frame = frame.rename(
+            columns={
+                "dlycaldt": "trade_date",
+                "dlyret": "ret",
+                "dlyprc": "prc",
+                "dlyvol": "vol",
+            }
+        )
+
+        if "trade_date" not in frame.columns:
+            raise ValueError("WRDS output missing required column 'trade_date'.")
+
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="raise")
+        frame["ticker"] = frame["ticker"].astype("string").str.strip().str.upper()
+
+        for col in ("permno", "ret", "prc", "vol", "shrout"):
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+
+        frame = frame.sort_values(["trade_date", "permno", "ticker"]).drop_duplicates(
+            subset=["trade_date", "permno"],
+            keep="first",
+        )
+
+        frame["source"] = "wrds_crsp"
+        frame["load_ts_utc"] = load_ts
+
+        return frame[
+            [
+                "trade_date",
+                "ticker",
+                "permno",
+                "ret",
+                "prc",
+                "vol",
+                "shrout",
+                "source",
+                "load_ts_utc",
+            ]
+        ]
+
+    def _connect(self) -> WrdsConnection:
+        username = wrds_username(self.username)
+        factory = self.connection_factory
+        if factory is not None:
+            return factory(wrds_username=username)
+
+        try:
+            import wrds
+        except Exception as exc:
+            raise RuntimeError("wrds package is unavailable in this environment.") from exc
+
+        try:
+            conn = wrds.Connection(
+                wrds_username=username,
+                wrds_password=wrds_password(),
+            )
+            return cast(WrdsConnection, conn)
+        except Exception as exc:  # pragma: no cover - external auth/runtime variance
+            raise RuntimeError(
+                "Unable to establish WRDS connection. Check WRDS_USERNAME and WRDS_PASSWORD/.pgpass."
+            ) from exc
 
 
 @dataclass(frozen=True)
@@ -220,6 +434,89 @@ def load_daily_returns_config(path: str | Path) -> DailyReturnsConfig:
     )
 
 
+def load_security_returns_dataset(path: str | Path) -> pd.DataFrame:
+    """Load the canonical persisted security returns dataset."""
+
+    dataset_path = Path(path)
+    if not dataset_path.exists():
+        raise FileNotFoundError(
+            f"Security returns dataset not found: {dataset_path}. "
+            "Run 'python -m mic_data.market.pull_wrds_returns' first."
+        )
+
+    if dataset_path.suffix == ".parquet":
+        frame = pd.read_parquet(dataset_path)
+    elif dataset_path.suffix == ".csv":
+        frame = pd.read_csv(dataset_path)
+    else:
+        raise ValueError(
+            f"Unsupported security returns file type for {dataset_path}. "
+            "Expected .parquet or .csv."
+        )
+
+    return validate_security_returns_daily(frame)
+
+
+def expected_latest_trade_date(
+    *,
+    as_of_date: date | pd.Timestamp | None = None,
+    max_business_day_lag: int = 3,
+) -> pd.Timestamp:
+    """Compute the oldest acceptable latest trade date for persisted market data."""
+
+    if max_business_day_lag < 0:
+        raise ValueError("max_business_day_lag must be non-negative.")
+
+    anchor = pd.Timestamp(as_of_date or date.today()).normalize()
+    return anchor - BDay(max_business_day_lag)
+
+
+def latest_security_prices(
+    security_returns: pd.DataFrame,
+    *,
+    tickers: list[str] | None = None,
+    as_of_date: date | pd.Timestamp | None = None,
+    max_business_day_lag: int = 3,
+) -> LatestSecurityPrices:
+    """Extract the latest persisted close-like prices from canonical WRDS returns."""
+
+    validated = validate_security_returns_daily(security_returns)
+    latest_trade_date = pd.Timestamp(validated["trade_date"].max()).normalize()
+    stale_floor = expected_latest_trade_date(
+        as_of_date=as_of_date,
+        max_business_day_lag=max_business_day_lag,
+    )
+    if latest_trade_date < stale_floor:
+        raise RuntimeError(
+            "Security returns dataset is stale. "
+            f"Latest trade_date={latest_trade_date.date()} accepted_floor={stale_floor.date()}."
+        )
+
+    latest_rows = validated[validated["trade_date"] == latest_trade_date].copy()
+    latest_rows["ticker"] = latest_rows["ticker"].astype("string").str.strip().str.upper()
+    latest_rows["price_abs"] = latest_rows["prc"].abs()
+    latest_rows = latest_rows.dropna(subset=["price_abs"])
+
+    if tickers is not None:
+        normalized_tickers = {str(ticker).strip().upper() for ticker in tickers}
+        latest_rows = latest_rows[latest_rows["ticker"].isin(normalized_tickers)].copy()
+
+    dupes = latest_rows["ticker"][latest_rows["ticker"].duplicated()].unique().tolist()
+    if dupes:
+        raise ValueError(
+            "Latest security returns snapshot contains duplicate ticker prices: "
+            f"{sorted(str(ticker) for ticker in dupes)}"
+        )
+
+    prices = latest_rows.set_index("ticker")["price_abs"].sort_index()
+    if prices.empty:
+        raise ValueError(
+            "No persisted prices are available for the requested ticker set on the latest trade date."
+        )
+
+    return LatestSecurityPrices(trade_date=latest_trade_date, prices=prices)
+
+
 # Purpose: Return canonical run-date used for dated manifests and logs.
 def pipeline_run_date() -> date:
     return date.today()
@@ -322,7 +619,15 @@ def upsert_daily_qa_row(
     if existing.empty:
         merged = incoming.copy()
     else:
-        merged = pd.concat([existing, incoming], ignore_index=True)
+        merged = existing.copy()
+        key_cols = list(DAILY_QA_KEY)
+        incoming_key = tuple(incoming.iloc[0][key_cols].tolist())
+        existing_key_frame = merged[key_cols].apply(lambda row: tuple(row.tolist()), axis=1)
+        match_mask = existing_key_frame == incoming_key
+        if bool(match_mask.any()):
+            merged.loc[match_mask, incoming.columns] = incoming.iloc[0].tolist()
+        else:
+            merged.loc[len(merged), incoming.columns] = incoming.iloc[0].tolist()
 
     key_cols = list(DAILY_QA_KEY)
     merged = merged.sort_values(key_cols).drop_duplicates(key_cols, keep="last")

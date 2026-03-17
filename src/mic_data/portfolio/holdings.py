@@ -5,13 +5,16 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
+
+from mic_data.market.prices_daily import latest_security_prices, load_security_returns_dataset
 
 
 @dataclass(frozen=True)
 class HoldingsLatestPaths:
     positions_latest_csv: Path = Path("data/processed/positions_latest.csv")
     holdings_latest_csv: Path = Path("data/processed/holdings_latest.csv")
+    security_returns_path: Path = Path("data/processed/returns/security_returns_daily.parquet")
+    max_business_day_lag: int = 3
 
 
 def build_holdings_latest(
@@ -25,25 +28,22 @@ def build_holdings_latest(
 
     tickers = sorted(pos["ticker"].unique().tolist())
 
-    # Fast, robust: pull latest adj close via 5d history and take last
-    px = yf.download(
-        tickers, period="5d", interval="1d", auto_adjust=True, progress=False
+    security_returns = load_security_returns_dataset(paths.security_returns_path)
+    latest_snapshot = latest_security_prices(
+        security_returns,
+        tickers=tickers,
+        as_of_date=date.today(),
+        max_business_day_lag=paths.max_business_day_lag,
     )
-    if px is None or px.empty:
-        raise RuntimeError("yfinance returned no data for latest prices.")
-
-    # Handle both single-ticker and multi-ticker shapes
-    close = px["Close"]
-    if isinstance(close, pd.Series):
-        latest_prices = pd.Series({tickers[0]: float(close.dropna().iloc[-1])})
-    else:
-        latest_prices = close.dropna(how="all").iloc[-1].astype(float)
 
     out = pos[["ticker", "shares"]].copy()
-    out["price"] = out["ticker"].map(latest_prices.to_dict())
+    out["price"] = out["ticker"].map(latest_snapshot.prices.to_dict())
     if out["price"].isna().any():
         missing = out.loc[out["price"].isna(), "ticker"].tolist()
-        raise ValueError(f"Missing latest prices for: {missing}")
+        raise ValueError(
+            "Persisted security returns are incomplete for the latest trade date "
+            f"{latest_snapshot.trade_date.date()}: missing prices for {missing}"
+        )
 
     out["value"] = out["shares"] * out["price"]
     total = float(out["value"].sum())
@@ -53,7 +53,7 @@ def build_holdings_latest(
         )
 
     out["weight"] = out["value"] / total
-    out.insert(0, "as_of", date.today().isoformat())
+    out.insert(0, "as_of", latest_snapshot.trade_date.date().isoformat())
 
     paths.holdings_latest_csv.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(paths.holdings_latest_csv, index=False)

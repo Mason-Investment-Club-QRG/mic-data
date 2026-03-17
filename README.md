@@ -8,7 +8,7 @@ Data engineering pipeline for Mason Investment Club with a WRDS-first modeling s
 - Pulls daily security returns from WRDS/CRSP (`ret` as decimal total return).
 - Aggregates daily portfolio returns from holdings weights.
 - Publishes curated daily outputs back to Google Sheets.
-- Runs FF3 monthly modeling with WRDS factors (static-file fallback remains available in FF3 module).
+- Runs FF3 analysis from persisted daily pipeline outputs plus WRDS factor data.
 
 ## Pipeline Architecture
 ### Daily Returns (stage-based, idempotent)
@@ -21,10 +21,9 @@ Data engineering pipeline for Mason Investment Club with a WRDS-first modeling s
 Optional wrapper:
 - `market.prices_daily run-all` (convenience only)
 
-### Monthly FF3 (existing model path)
-1. `positions.sync`
-2. `portfolio.holdings`
-3. `models.fama_french_3`
+### Monthly FF3 Analysis
+1. Run the daily returns stages so `security_returns_daily` and `portfolio_returns_daily` exist.
+2. Consume those persisted datasets from `mic_data.models.ff_factor_matrix`.
 
 ## Key Config Files
 - `config/google_sheets.yaml`
@@ -34,7 +33,7 @@ Optional wrapper:
 - `config/returns_daily.yaml`
   - Daily returns date window, source paths, output paths, and idempotency defaults.
 - `config/ff3_pipeline.yaml`
-  - FF3 monthly model settings.
+  - Legacy FF3 runner settings. Default config is fail-fast and WRDS-first.
 
 ## Setup
 ```bash
@@ -112,10 +111,6 @@ PYTHONPATH=src python -m mic_data.market.prices_daily run-all --config config/re
 
 ### Monthly FF3
 - `data/processed/model_inputs/factors_wrds_m.parquet`
-- `data/processed/model_inputs/factors_static_m.parquet`
-- `outputs/validation/ff3_input_comparison.csv`
-- `outputs/validation/ff3_regression_comparison.json`
-- `outputs/validation/ff3_validation_summary.md`
 
 ## Tests
 ```bash

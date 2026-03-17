@@ -90,6 +90,7 @@ class TestRunner(unittest.TestCase):
                 processed_model_inputs_dir=root / "data/processed/model_inputs",
                 validation_output_dir=root / "outputs/validation",
                 logs_dir=root / "outputs/logs",
+                allow_fallback=True,
             )
 
             with patch("mic_data.models.runner._write_parquet", side_effect=self._mock_write_parquet):

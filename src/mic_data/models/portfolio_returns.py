@@ -2,53 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 import pandas as pd
-import yfinance as yf
 
+from mic_data.contracts.daily_returns_contracts import validate_portfolio_returns_daily
+from mic_data.market.prices_daily import expected_latest_trade_date
 from mic_data.models.constants import ModelFrequency
 from mic_data.models.interfaces import PortfolioReturnSource
 
 
-class YFDownloadFn(Protocol):
-    """Callable signature used for yfinance history pulls."""
-
-    def __call__(
-        self,
-        tickers: list[str],
-        *,
-        start: str,
-        end: str,
-        interval: str,
-        auto_adjust: bool,
-        progress: bool,
-    ) -> pd.DataFrame | None:
-        ...
-
-
 @dataclass(frozen=True)
-class YFinancePortfolioReturnSource(PortfolioReturnSource):
-    """Build portfolio returns from holdings weights and yfinance prices.
+class PersistedPortfolioReturnSource(PortfolioReturnSource):
+    """Build monthly portfolio returns from persisted daily pipeline outputs."""
 
-    Inputs:
-      - holdings_path: CSV with at least ticker and weight columns.
-      - yf_download: Optional injectable download function for tests.
-
-    Returns:
-      - pd.Series named portfolio_return indexed by month-end date.
-
-    Raises:
-      - FileNotFoundError if holdings CSV is missing.
-      - ValueError for malformed holdings/weights or unsupported frequency.
-      - RuntimeError when yfinance returns no price data.
-
-    Notes on units:
-      - Output series values are decimal returns (0.01 = 1%).
-    """
-
-    holdings_path: Path = Path("data/processed/holdings_latest.csv")
-    yf_download: YFDownloadFn | None = None
+    portfolio_returns_path: Path = Path("data/processed/returns/portfolio_returns_daily.parquet")
+    max_business_day_lag: int = 3
 
     def load_portfolio_returns(
         self,
@@ -56,111 +24,67 @@ class YFinancePortfolioReturnSource(PortfolioReturnSource):
         end_date: str,
         frequency: ModelFrequency = "M",
     ) -> pd.Series:
-        """Load monthly portfolio returns for FF3 regression.
-
-        Inputs:
-          - start_date: Inclusive start date in YYYY-MM-DD format.
-          - end_date: Inclusive end date in YYYY-MM-DD format.
-          - frequency: Only "M" is supported.
-
-        Returns:
-          - pd.Series monthly portfolio returns (decimal) named portfolio_return.
-
-        Raises:
-          - FileNotFoundError when holdings file is missing.
-          - ValueError for bad holdings schema/weights.
-          - RuntimeError when market prices cannot be pulled.
-
-        Notes on units:
-          - Returns are decimal values.
-        """
         if frequency != "M":
-            raise ValueError("YFinancePortfolioReturnSource only supports monthly frequency 'M'.")
+            raise ValueError("PersistedPortfolioReturnSource only supports monthly frequency 'M'.")
 
-        weights = self._load_weights()
-        tickers = weights.index.tolist()
+        daily = self._load_daily_returns()
+        latest_trade_date = pd.Timestamp(daily["trade_date"].max()).normalize()
+        stale_floor = expected_latest_trade_date(max_business_day_lag=self.max_business_day_lag)
+        if latest_trade_date < stale_floor:
+            raise RuntimeError(
+                "Portfolio returns dataset is stale. "
+                f"Latest trade_date={latest_trade_date.date()} accepted_floor={stale_floor.date()}."
+            )
 
-        downloader = self.yf_download or yf.download
-        raw = downloader(
-            tickers,
-            start=pd.Timestamp(start_date).strftime("%Y-%m-%d"),
-            end=pd.Timestamp(end_date).strftime("%Y-%m-%d"),
-            interval="1mo",
-            auto_adjust=True,
-            progress=False,
+        start_ts = pd.Timestamp(start_date).normalize()
+        end_ts = pd.Timestamp(end_date).normalize()
+        if end_ts < start_ts:
+            raise ValueError("end_date must be greater than or equal to start_date.")
+
+        filtered = daily[
+            (daily["trade_date"] >= start_ts) & (daily["trade_date"] <= end_ts)
+        ].copy()
+        if filtered.empty:
+            raise ValueError(
+                "Portfolio returns dataset has no observations in the requested window "
+                f"[{start_date}, {end_date}]."
+            )
+
+        monthly = (
+            (1.0 + filtered.set_index("trade_date")["portfolio_ret"])
+            .resample("ME")
+            .prod()
+            .sub(1.0)
         )
+        monthly.name = "portfolio_return"
+        monthly = monthly.dropna()
 
-        if raw is None or raw.empty:
-            raise RuntimeError("yfinance returned no data for portfolio return calculation.")
+        expected_months = pd.period_range(start_ts.to_period("M"), end_ts.to_period("M"), freq="M")
+        observed_months = monthly.index.to_period("M")
+        missing_months = [str(period) for period in expected_months if period not in observed_months]
+        if missing_months:
+            raise ValueError(
+                "Portfolio returns dataset is incomplete for the requested monthly window. "
+                f"Missing month(s): {missing_months}"
+            )
 
-        close_obj = raw.get("Close")
-        if close_obj is None:
-            raise RuntimeError("yfinance output is missing expected 'Close' data.")
+        return monthly
 
-        if isinstance(close_obj, pd.Series):
-            close = close_obj.to_frame(name=tickers[0])
-        elif isinstance(close_obj, pd.DataFrame):
-            close = close_obj.copy()
+    def _load_daily_returns(self) -> pd.DataFrame:
+        path = self.portfolio_returns_path
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Portfolio returns file not found: {path}. "
+                "Run 'python -m mic_data.market.build_portfolio_returns' first."
+            )
+
+        if path.suffix == ".parquet":
+            frame = pd.read_parquet(path)
+        elif path.suffix == ".csv":
+            frame = pd.read_csv(path)
         else:
-            raise RuntimeError("yfinance returned unsupported 'Close' data structure.")
-
-        close = close.apply(lambda col: pd.to_numeric(col, errors="coerce")).astype("float64")
-
-        close.index = pd.to_datetime(close.index)
-        # Normalize to month-end labels so all sources align on the same calendar index.
-        close_idx = pd.DatetimeIndex(close.index)
-        close.index = close_idx.to_period("M").to_timestamp("M")
-        close = close.groupby(level=0).last().sort_index()
-
-        asset_returns = close.pct_change().dropna(how="all")
-        asset_returns = asset_returns.reindex(columns=tickers)
-
-        # Existing behavior: weighted sum across available ticker returns each month.
-        portfolio_returns = asset_returns.mul(weights, axis=1).sum(axis=1, min_count=1)
-        portfolio_returns.name = "portfolio_return"
-
-        start_period = pd.Timestamp(start_date).to_period("M")
-        end_period = pd.Timestamp(end_date).to_period("M")
-        portfolio_idx = pd.DatetimeIndex(portfolio_returns.index)
-        portfolio_period = portfolio_idx.to_period("M")
-        mask = (portfolio_period >= start_period) & (
-            portfolio_period <= end_period
-        )
-        portfolio_returns = portfolio_returns.loc[mask].dropna()
-
-        if portfolio_returns.empty:
             raise ValueError(
-                "Portfolio return series is empty after alignment/filtering. "
-                "Check holdings tickers and date range."
+                f"Unsupported portfolio returns file type for {path}. Expected .parquet or .csv."
             )
 
-        return portfolio_returns
-
-    def _load_weights(self) -> pd.Series:
-        if not self.holdings_path.exists():
-            raise FileNotFoundError(f"Holdings file not found: {self.holdings_path}")
-
-        holdings = pd.read_csv(self.holdings_path)
-        required = {"ticker", "weight"}
-        missing = required - set(holdings.columns)
-        if missing:
-            raise ValueError(
-                f"Holdings file missing required columns: {sorted(missing)}. "
-                f"Available columns: {list(holdings.columns)}"
-            )
-
-        holdings = holdings.copy()
-        holdings["ticker"] = holdings["ticker"].astype(str).str.strip().str.upper()
-        holdings["weight"] = pd.to_numeric(holdings["weight"], errors="raise").astype("float64")
-
-        weights = holdings.set_index("ticker")["weight"]
-        total = float(weights.sum())
-        if total <= 0:
-            raise ValueError("Holdings weights sum to a non-positive value.")
-
-        if abs(total - 1.0) > 1e-3:
-            raise ValueError(
-                f"Holdings weights must sum to ~1.0 for FF3 regression, got {total:.6f}."
-            )
-
-        return weights
+        return validate_portfolio_returns_daily(frame)

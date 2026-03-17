@@ -16,6 +16,7 @@ if __package__ is None or __package__ == "":
 from mic_data.contracts.daily_returns_contracts import QaRow, WriteMode, validate_universe_daily
 from mic_data.market.prices_daily import (
     DailyReturnsConfig,
+    WrdsCrspDailyReturnSource,
     append_stage_log,
     load_daily_returns_config,
     parse_write_mode,
@@ -24,7 +25,6 @@ from mic_data.market.prices_daily import (
     upsert_daily_qa_row,
     write_daily_manifest,
 )
-from mic_data.market.wrds_returns_source import WrdsCrspDailyReturnSource
 from mic_data.utils.idempotent_io import atomic_write_csv, atomic_write_parquet, stage_lock
 
 
