@@ -8,6 +8,7 @@
 - Publishes daily outputs to Google Sheets.
 - Runs monthly FF3 model analysis.
 - Builds portfolio analytics tables and SVG charts from persisted outputs.
+- Includes FF3 exposure, factor-risk, and holdings-level FF3 charts in the analytics report.
 
 ## Quickstart
 
@@ -91,6 +92,12 @@ PYTHONPATH=src .venv/bin/python -m mic_data.analytics.report \
   --end-date 2025-12-31
 ```
 
+The analytics report now produces:
+- benchmark performance and beta charts
+- top holdings and market-cap mix charts
+- Sharpe summary card
+- FF3 portfolio exposure, exposure comparison, factor risk contribution, and holdings heatmap charts
+
 ### 7) Run tests
 ```bash
 PYTHONPATH=src .venv/bin/python -m unittest discover -s test/models -p 'test_*.py'
@@ -100,3 +107,4 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s test/models -p 'test_*.p
 - Portfolio performance, beta, and Sharpe in the analytics layer are based on the
   pipeline's `holdings_weighted_sum` proxy series.
 - The analytics outputs do not yet reflect historical portfolio composition changes.
+- The FF3 charts use that same proxy return history for return-based exposures and the current holdings weights for holdings-based exposures.

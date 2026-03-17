@@ -137,6 +137,57 @@ Columns:
 - `benchmark_ret` (`float64`, nullable)
 - `fitted_portfolio_ret` (`float64`, nullable)
 
+## `ff3/security_loadings`
+Purpose: per-security FF3 regression outputs for all modeled securities in the analytics window.
+
+Columns:
+- `ticker` (`string`, non-null)
+- `alpha` (`float64`, nullable)
+- `mkt_rf` (`float64`, nullable)
+- `smb` (`float64`, nullable)
+- `hml` (`float64`, nullable)
+- `r2` (`float64`, nullable)
+- `n_obs` (`int64`, nullable)
+- `residual_var` (`float64`, nullable)
+- `explained_var` (`float64`, nullable)
+- `explained_var_ratio` (`float64`, nullable)
+
+## `ff3/portfolio_exposure_comparison`
+Purpose: return-based and holdings-based FF3 portfolio exposures used in comparison charts.
+
+Columns:
+- `exposure_method` (`string`, non-null)
+- `alpha` (`float64`, nullable)
+- `mkt_rf` (`float64`, nullable)
+- `smb` (`float64`, nullable)
+- `hml` (`float64`, nullable)
+
+## `ff3/factor_risk_contributions`
+Purpose: FF3 variance contribution by factor for the portfolio proxy return series.
+
+Columns:
+- `factor` (`string`, non-null)
+- `variance_contribution` (`float64`, nullable)
+
+## `ff3/holdings_ff3_loadings`
+Purpose: current holdings snapshot enriched with FF3 loadings for the holdings heatmap.
+
+Columns:
+- `weight_rank` (`int64`, non-null)
+- `ticker` (`string`, non-null)
+- `name` (`string`, nullable)
+- `portfolio_weight` (`float64`, non-null)
+- `portfolio_weight_pct` (`float64`, non-null)
+- `ff3_modeled` (`bool`, non-null)
+- `ff3_excluded_reason` (`string`, nullable)
+- `alpha` (`float64`, nullable)
+- `mkt_rf` (`float64`, nullable)
+- `smb` (`float64`, nullable)
+- `hml` (`float64`, nullable)
+- `r2` (`float64`, nullable)
+- `n_obs` (`int64`, nullable)
+- `explained_var_ratio` (`float64`, nullable)
+
 ## Idempotency Contract
 - Deterministic sort before write.
 - Atomic file write (temp + replace).

@@ -328,12 +328,13 @@ def run_ff3_factor_analysis(
             security_weights,
             security_beta_matrix.index,
         )
+        aligned_security_loadings = security_loadings.reindex(aligned_weights.index)
         portfolio_holdings_exposure = pd.Series(
             {
-                "alpha": float(aligned_weights @ security_loadings["alpha"]),
-                "mkt_rf": float(aligned_weights @ security_loadings["mkt_rf"]),
-                "smb": float(aligned_weights @ security_loadings["smb"]),
-                "hml": float(aligned_weights @ security_loadings["hml"]),
+                "alpha": float(aligned_weights @ aligned_security_loadings["alpha"]),
+                "mkt_rf": float(aligned_weights @ aligned_security_loadings["mkt_rf"]),
+                "smb": float(aligned_weights @ aligned_security_loadings["smb"]),
+                "hml": float(aligned_weights @ aligned_security_loadings["hml"]),
             },
             name="holdings_based",
         )

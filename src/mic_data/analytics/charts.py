@@ -23,11 +23,16 @@ from matplotlib.ticker import FuncFormatter
 
 from mic_data.analytics.dashboard import PortfolioAnalyticsResult
 from mic_data.analytics.theme import CLUB_COLORS, build_theme_rc, cap_mix_palette, holdings_palette
+from mic_data.models.ff_factor_matrix import FACTOR_BETA_COLUMNS
 
 
 NOTE = (
     "Proxy series note: portfolio returns use the current holdings snapshot applied backward; "
     "historical composition changes are not yet modeled."
+)
+FF3_NOTE = (
+    "FF3 note: return-based exposure comes from the portfolio proxy return series; "
+    "holdings-based exposure uses the current holdings weights."
 )
 
 
@@ -50,6 +55,10 @@ def render_analytics_charts(
         "top_holdings_chart": charts_dir / "top_holdings.svg",
         "market_cap_mix_chart": charts_dir / "market_cap_mix.svg",
         "sharpe_card": charts_dir / "sharpe_ratio.svg",
+        "ff3_portfolio_exposure_chart": charts_dir / "ff3_portfolio_exposure.svg",
+        "ff3_exposure_comparison_chart": charts_dir / "ff3_exposure_comparison.svg",
+        "ff3_factor_risk_chart": charts_dir / "ff3_factor_risk_contributions.svg",
+        "ff3_security_heatmap_chart": charts_dir / "ff3_security_heatmap.svg",
     }
 
     _save_svg_figure(
@@ -81,6 +90,22 @@ def render_analytics_charts(
     _save_svg_figure(
         chart_paths["sharpe_card"],
         _plot_sharpe_card(result.summary["sharpe"]),
+    )
+    _save_svg_figure(
+        chart_paths["ff3_portfolio_exposure_chart"],
+        _plot_ff3_portfolio_exposure_chart(result),
+    )
+    _save_svg_figure(
+        chart_paths["ff3_exposure_comparison_chart"],
+        _plot_ff3_exposure_comparison_chart(result),
+    )
+    _save_svg_figure(
+        chart_paths["ff3_factor_risk_chart"],
+        _plot_ff3_factor_risk_chart(result),
+    )
+    _save_svg_figure(
+        chart_paths["ff3_security_heatmap_chart"],
+        _plot_ff3_security_heatmap_chart(result),
     )
     return chart_paths
 
@@ -434,6 +459,289 @@ def _plot_sharpe_card(sharpe_summary: object) -> plt.Figure:
     return fig
 
 
+def _plot_ff3_portfolio_exposure_chart(result: PortfolioAnalyticsResult) -> plt.Figure:
+    exposure = result.ff3_analysis.portfolio_return_exposure[list(FACTOR_BETA_COLUMNS)].rename(
+        index=_factor_label
+    )
+    exposure_frame = exposure.reset_index()
+    exposure_frame.columns = ["factor", "exposure"]
+
+    fig, ax = plt.subplots(figsize=(10.6, 7.0))
+    _style_axes(ax, grid_axis="y")
+
+    sns.barplot(
+        data=exposure_frame,
+        x="factor",
+        y="exposure",
+        hue="factor",
+        palette=cap_mix_palette(len(exposure_frame)),
+        legend=False,
+        ax=ax,
+    )
+    ax.axhline(0.0, color=CLUB_COLORS.silver_deep, linewidth=1.2)
+    ax.set_xlabel("")
+    ax.set_ylabel("Estimated beta")
+
+    for patch, (_, row) in zip(ax.patches, exposure_frame.iterrows(), strict=False):
+        value = float(row["exposure"])
+        ax.text(
+            patch.get_x() + patch.get_width() / 2.0,
+            value + (0.03 if value >= 0 else -0.06),
+            f"{value:.2f}",
+            ha="center",
+            va="bottom" if value >= 0 else "top",
+            fontsize=12,
+            fontweight="bold",
+            color=CLUB_COLORS.ink,
+        )
+
+    ax.text(
+        0.98,
+        0.05,
+        "\n".join(
+            [
+                f"Alpha / day: {_format_percent(result.ff3_analysis.portfolio_return_exposure['alpha'])}",
+                f"R-squared: {_format_number(result.ff3_analysis.portfolio_return_exposure['r2'], 2)}",
+                f"Obs: {int(result.ff3_analysis.portfolio_return_exposure['n_obs'])}",
+            ]
+        ),
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=12,
+        bbox={
+            "boxstyle": "round,pad=0.5",
+            "facecolor": CLUB_COLORS.white,
+            "edgecolor": CLUB_COLORS.silver_deep,
+            "linewidth": 1.0,
+        },
+    )
+
+    _set_titles(
+        fig,
+        ax,
+        title="Portfolio FF3 Return-Based Exposure",
+        subtitle="Mkt-RF, SMB, and HML exposures estimated from the portfolio proxy return series",
+    )
+    _add_note(fig, _ff3_note(result))
+    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
+    return fig
+
+
+def _plot_ff3_exposure_comparison_chart(result: PortfolioAnalyticsResult) -> plt.Figure:
+    comparison = result.ff3_analysis.tables["portfolio_exposure_comparison"].copy()
+    plot_frame = comparison.melt(
+        id_vars=["exposure_method"],
+        value_vars=list(FACTOR_BETA_COLUMNS),
+        var_name="factor",
+        value_name="exposure",
+    )
+    plot_frame["factor"] = plot_frame["factor"].map(_factor_label)
+    plot_frame["exposure_method"] = plot_frame["exposure_method"].map(
+        {
+            "return_based": "Return-based",
+            "holdings_based": "Holdings-based",
+        }
+    )
+
+    fig, ax = plt.subplots(figsize=(11.0, 7.0))
+    _style_axes(ax, grid_axis="y")
+
+    sns.barplot(
+        data=plot_frame,
+        x="factor",
+        y="exposure",
+        hue="exposure_method",
+        palette=[CLUB_COLORS.green, CLUB_COLORS.gold],
+        ax=ax,
+    )
+    ax.axhline(0.0, color=CLUB_COLORS.silver_deep, linewidth=1.2)
+    ax.set_xlabel("")
+    ax.set_ylabel("Estimated beta")
+    ax.legend(
+        title="Exposure source",
+        frameon=True,
+        fancybox=True,
+        facecolor=CLUB_COLORS.white,
+        edgecolor=CLUB_COLORS.silver_deep,
+        loc="upper right",
+    )
+
+    alpha_text = [
+        f"Return-based alpha / day: {_format_percent(result.ff3_analysis.portfolio_return_exposure['alpha'])}"
+    ]
+    if result.ff3_analysis.portfolio_holdings_exposure is not None:
+        alpha_text.append(
+            "Holdings-based alpha / day: "
+            f"{_format_percent(result.ff3_analysis.portfolio_holdings_exposure['alpha'])}"
+        )
+    ax.text(
+        0.02,
+        0.05,
+        "\n".join(alpha_text),
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=12,
+        bbox={
+            "boxstyle": "round,pad=0.45",
+            "facecolor": CLUB_COLORS.white,
+            "edgecolor": CLUB_COLORS.silver_deep,
+            "linewidth": 1.0,
+        },
+    )
+
+    _set_titles(
+        fig,
+        ax,
+        title="Return-Based vs Holdings-Based FF3 Exposure",
+        subtitle="Current holdings weights are compared against exposures estimated from the portfolio proxy return series",
+    )
+    _add_note(fig, _ff3_note(result))
+    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
+    return fig
+
+
+def _plot_ff3_factor_risk_chart(result: PortfolioAnalyticsResult) -> plt.Figure:
+    contributions = result.ff3_analysis.factor_risk_contributions.copy()
+    total_variance = float(result.ff3_analysis.portfolio_risk_summary["total_variance"])
+    plot_frame = (
+        contributions.rename("variance_contribution")
+        .rename(index=_factor_label)
+        .reset_index()
+        .rename(columns={"index": "factor"})
+    )
+    plot_frame["share_of_total_variance"] = (
+        plot_frame["variance_contribution"] / total_variance if total_variance > 0 else 0.0
+    )
+    plot_frame["share_pct"] = plot_frame["share_of_total_variance"] * 100.0
+    plot_frame["bar_color"] = plot_frame["share_pct"].apply(
+        lambda value: CLUB_COLORS.green if value >= 0 else CLUB_COLORS.gold_dark
+    )
+
+    fig, ax = plt.subplots(figsize=(10.8, 7.0))
+    _style_axes(ax, grid_axis="y")
+
+    ax.bar(
+        plot_frame["factor"],
+        plot_frame["share_pct"],
+        color=plot_frame["bar_color"],
+        width=0.62,
+    )
+    ax.axhline(0.0, color=CLUB_COLORS.silver_deep, linewidth=1.2)
+    ax.set_xlabel("")
+    ax.set_ylabel("Share of total variance")
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:.0f}%"))
+
+    for idx, row in plot_frame.iterrows():
+        value = float(row["share_pct"])
+        ax.text(
+            idx,
+            value + (0.7 if value >= 0 else -1.2),
+            f"{value:.1f}%",
+            ha="center",
+            va="bottom" if value >= 0 else "top",
+            fontsize=12,
+            fontweight="bold",
+            color=CLUB_COLORS.ink,
+        )
+
+    risk = result.ff3_analysis.portfolio_risk_summary
+    ax.text(
+        0.98,
+        0.05,
+        "\n".join(
+            [
+                f"Factor share: {_format_percent(risk['factor_share'])}",
+                f"Idiosyncratic share: {_format_percent(risk['idiosyncratic_share'])}",
+                f"Volatility: {_format_percent(risk['volatility'])}",
+                f"R-squared: {_format_number(risk['r2'], 2)}",
+            ]
+        ),
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=12,
+        bbox={
+            "boxstyle": "round,pad=0.5",
+            "facecolor": CLUB_COLORS.white,
+            "edgecolor": CLUB_COLORS.silver_deep,
+            "linewidth": 1.0,
+        },
+    )
+
+    _set_titles(
+        fig,
+        ax,
+        title="FF3 Factor Risk Contributions",
+        subtitle="Each bar shows the factor's contribution to total portfolio variance",
+    )
+    _add_note(fig, _ff3_note(result))
+    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
+    return fig
+
+
+def _plot_ff3_security_heatmap_chart(result: PortfolioAnalyticsResult) -> plt.Figure:
+    modeled = result.holdings_ff3_loadings[result.holdings_ff3_loadings["ff3_modeled"]].copy()
+    if modeled.empty:
+        raise ValueError("No current holdings have FF3 loadings available for the heatmap.")
+
+    modeled["row_label"] = modeled.apply(
+        lambda row: f"{row['ticker']}  ({float(row['portfolio_weight_pct']):.1f}%)",
+        axis=1,
+    )
+    heatmap_frame = modeled.set_index("row_label")[list(FACTOR_BETA_COLUMNS)].rename(
+        columns=_factor_label
+    )
+    max_abs = float(heatmap_frame.abs().to_numpy().max())
+    vmax = max(0.5, min(2.0, max_abs))
+
+    fig_height = max(6.8, 0.55 * len(heatmap_frame) + 2.2)
+    fig, ax = plt.subplots(figsize=(9.2, fig_height))
+    fig.patch.set_facecolor(CLUB_COLORS.canvas)
+    ax.set_facecolor(CLUB_COLORS.white)
+
+    cmap = sns.diverging_palette(
+        h_neg=160,
+        h_pos=42,
+        s=85,
+        l=45,
+        as_cmap=True,
+    )
+    sns.heatmap(
+        heatmap_frame,
+        cmap=cmap,
+        center=0.0,
+        vmin=-vmax,
+        vmax=vmax,
+        annot=True,
+        fmt=".2f",
+        linewidths=0.8,
+        linecolor=CLUB_COLORS.silver,
+        cbar_kws={"label": "Estimated beta"},
+        ax=ax,
+    )
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.tick_params(axis="x", rotation=0)
+    ax.tick_params(axis="y", rotation=0)
+
+    skipped_count = int(result.summary["ff3"]["current_holdings_skipped_count"])
+    subtitle = "Current holdings only, ordered by latest portfolio weight"
+    if skipped_count > 0:
+        subtitle += f" | {skipped_count} holding(s) omitted for insufficient FF3 history"
+
+    _set_titles(
+        fig,
+        ax,
+        title="Current Holdings FF3 Beta Heatmap",
+        subtitle=subtitle,
+    )
+    _add_note(fig, _ff3_note(result))
+    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
+    return fig
+
+
 def _style_axes(ax: plt.Axes, *, grid_axis: str = "both") -> None:
     ax.set_facecolor(CLUB_COLORS.white)
     ax.grid(True, axis=grid_axis, color=CLUB_COLORS.silver, linewidth=1.0, alpha=0.85)
@@ -522,3 +830,20 @@ def _format_percent(value: object) -> str:
     if not math.isfinite(numeric):
         return "n/a"
     return f"{numeric * 100:.2f}%"
+
+
+def _factor_label(value: str) -> str:
+    mapping = {
+        "mkt_rf": "Mkt-RF",
+        "smb": "SMB",
+        "hml": "HML",
+    }
+    return mapping.get(str(value), str(value))
+
+
+def _ff3_note(result: PortfolioAnalyticsResult) -> str:
+    note = FF3_NOTE
+    skipped = int(result.summary["ff3"]["current_holdings_skipped_count"])
+    if skipped > 0:
+        note += f" {skipped} current holding(s) were omitted for insufficient overlapping FF3 history."
+    return note

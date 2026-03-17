@@ -122,6 +122,35 @@ class TestFFFactorMatrix(unittest.TestCase):
         self.assertIn("limitations", result.metadata)
         self.assertGreater(float(result.portfolio_risk_summary["factor_share"]), 0.5)
 
+    def test_run_ff3_factor_analysis_aligns_holdings_weights_when_watchlist_ticker_is_modeled(self) -> None:
+        security_returns, portfolio_returns, factors = self._build_inputs()
+        extra = pd.DataFrame(
+            {
+                "trade_date": security_returns["trade_date"].unique(),
+                "ticker": "SPY",
+                "permno": 10003,
+                "ret": factors["mkt_rf"].to_numpy() + factors["rf"].to_numpy(),
+                "prc": 30.0,
+                "vol": 2000.0,
+                "shrout": 100.0,
+                "source": "wrds_crsp",
+                "load_ts_utc": pd.Timestamp("2026-03-03T00:00:00Z"),
+            }
+        )
+        security_returns = pd.concat([security_returns, extra], ignore_index=True)
+
+        result = run_ff3_factor_analysis(
+            security_returns=security_returns,
+            portfolio_returns=portfolio_returns,
+            factors=factors,
+            security_weights=pd.Series({"AAA": 0.6, "BBB": 0.4}),
+            min_obs=100,
+        )
+
+        self.assertIsNotNone(result.portfolio_holdings_exposure)
+        assert result.portfolio_holdings_exposure is not None
+        self.assertAlmostEqual(float(result.portfolio_holdings_exposure["mkt_rf"]), 1.04, delta=0.08)
+
     def test_load_pipeline_return_inputs_filters_dates_and_tickers(self) -> None:
         security_returns, portfolio_returns, factors = self._build_inputs()
         _ = factors

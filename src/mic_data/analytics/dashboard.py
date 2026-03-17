@@ -15,8 +15,11 @@ from mic_data.contracts.daily_returns_contracts import (
 from mic_data.models.ff_factor_matrix import (
     DEFAULT_PORTFOLIO_RETURNS_PATH,
     DEFAULT_SECURITY_RETURNS_PATH,
+    FF3AnalysisResult,
+    analysis_summary_payload,
     load_pipeline_return_inputs,
     normalize_ff3_factors,
+    run_ff3_factor_analysis,
 )
 
 
@@ -40,7 +43,9 @@ class PortfolioAnalyticsResult:
     benchmark_comparison: pd.DataFrame
     beta_regression: pd.DataFrame
     holdings_snapshot: pd.DataFrame
+    holdings_ff3_loadings: pd.DataFrame
     market_cap_mix: pd.DataFrame
+    ff3_analysis: FF3AnalysisResult
     summary: dict[str, object]
 
 
@@ -74,6 +79,7 @@ def build_portfolio_analytics(
     factors: pd.DataFrame,
     benchmark_ticker: str = "SPY",
     beta_frequency: str = "weekly",
+    ff3_min_obs: int = 60,
     trading_days_per_year: int = 252,
     top_n_holdings: int = 5,
     output_value_base: float = 100.0,
@@ -104,6 +110,17 @@ def build_portfolio_analytics(
     holdings_snapshot = _build_current_holdings_snapshot(
         universe=universe,
         security_returns=security_returns,
+    )
+    ff3_analysis = run_ff3_factor_analysis(
+        security_returns=security_returns,
+        portfolio_returns=portfolio_returns,
+        factors=factor_frame,
+        security_weights=holdings_snapshot.set_index("ticker")["portfolio_weight"],
+        min_obs=ff3_min_obs,
+    )
+    holdings_ff3_loadings = _build_holdings_ff3_loadings(
+        holdings_snapshot=holdings_snapshot,
+        ff3_analysis=ff3_analysis,
     )
     market_cap_mix = _build_market_cap_mix(holdings_snapshot)
     performance_summary = _build_performance_summary(
@@ -139,13 +156,20 @@ def build_portfolio_analytics(
             "top_holding_weight": float(top_holding["portfolio_weight"]),
             "total_position_value": float(holdings_snapshot["position_value"].sum()),
         },
+        "ff3": _build_ff3_summary(
+            ff3_analysis=ff3_analysis,
+            holdings_ff3_loadings=holdings_ff3_loadings,
+            ff3_min_obs=ff3_min_obs,
+        ),
     }
 
     return PortfolioAnalyticsResult(
         benchmark_comparison=comparison,
         beta_regression=beta_regression,
         holdings_snapshot=holdings_snapshot,
+        holdings_ff3_loadings=holdings_ff3_loadings,
         market_cap_mix=market_cap_mix,
+        ff3_analysis=ff3_analysis,
         summary=summary,
     )
 
@@ -467,6 +491,39 @@ def _build_market_cap_mix(holdings_snapshot: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
+def _build_holdings_ff3_loadings(
+    *,
+    holdings_snapshot: pd.DataFrame,
+    ff3_analysis: FF3AnalysisResult,
+) -> pd.DataFrame:
+    security_loadings = ff3_analysis.security_loadings.reset_index().copy()
+    out = holdings_snapshot.merge(security_loadings, on="ticker", how="left")
+    out["ff3_modeled"] = out["mkt_rf"].notna()
+    out["ff3_excluded_reason"] = pd.Series(pd.NA, index=out.index, dtype="string")
+    out.loc[~out["ff3_modeled"], "ff3_excluded_reason"] = (
+        "insufficient_overlapping_history_for_ff3"
+    )
+
+    return out[
+        [
+            "weight_rank",
+            "ticker",
+            "name",
+            "portfolio_weight",
+            "portfolio_weight_pct",
+            "ff3_modeled",
+            "ff3_excluded_reason",
+            "alpha",
+            "mkt_rf",
+            "smb",
+            "hml",
+            "r2",
+            "n_obs",
+            "explained_var_ratio",
+        ]
+    ].sort_values(["weight_rank", "ticker"]).reset_index(drop=True)
+
+
 def _build_performance_summary(
     *,
     comparison: pd.DataFrame,
@@ -503,6 +560,25 @@ def _build_performance_summary(
             active_return / tracking_error if tracking_error > 0 else float("nan")
         ),
     }
+
+
+def _build_ff3_summary(
+    *,
+    ff3_analysis: FF3AnalysisResult,
+    holdings_ff3_loadings: pd.DataFrame,
+    ff3_min_obs: int,
+) -> dict[str, object]:
+    payload = analysis_summary_payload(ff3_analysis)
+    current_holdings_skipped = (
+        holdings_ff3_loadings.loc[~holdings_ff3_loadings["ff3_modeled"], "ticker"]
+        .astype(str)
+        .tolist()
+    )
+    payload["current_holdings_modeled_count"] = int(holdings_ff3_loadings["ff3_modeled"].sum())
+    payload["current_holdings_skipped_count"] = int((~holdings_ff3_loadings["ff3_modeled"]).sum())
+    payload["current_holdings_skipped"] = current_holdings_skipped
+    payload["ff3_min_obs"] = int(ff3_min_obs)
+    return payload
 
 
 def _return_series_summary(

@@ -42,6 +42,7 @@ class AnalyticsReportConfig:
     portfolio_returns_path: Path
     benchmark_ticker: str
     beta_frequency: str
+    ff3_min_obs: int
     trading_days_per_year: int
     top_n_holdings: int
     output_value_base: float
@@ -82,6 +83,7 @@ def load_report_config(path: str | Path) -> AnalyticsReportConfig:
         ),
         benchmark_ticker=_optional_string(run, key="benchmark_ticker") or "SPY",
         beta_frequency=_optional_string(run, key="beta_frequency") or "weekly",
+        ff3_min_obs=_require_int(run, key="ff3_min_obs", default=60),
         trading_days_per_year=_require_int(run, key="trading_days_per_year", default=252),
         top_n_holdings=_require_int(run, key="top_n_holdings", default=5),
         output_value_base=_require_float(run, key="output_value_base", default=100.0),
@@ -122,6 +124,7 @@ def run_analytics_report(config: AnalyticsReportConfig) -> dict[str, object]:
         factors=factors,
         benchmark_ticker=config.benchmark_ticker,
         beta_frequency=config.beta_frequency,
+        ff3_min_obs=config.ff3_min_obs,
         trading_days_per_year=config.trading_days_per_year,
         top_n_holdings=config.top_n_holdings,
         output_value_base=config.output_value_base,
@@ -167,6 +170,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Return frequency used for beta regression.",
     )
     parser.add_argument(
+        "--ff3-min-obs",
+        type=int,
+        default=None,
+        help="Minimum overlapping observations required for FF3 regressions.",
+    )
+    parser.add_argument(
         "--top-n-holdings",
         type=int,
         default=None,
@@ -194,6 +203,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         end_date=args.end_date,
         benchmark_ticker=args.benchmark_ticker,
         beta_frequency=args.beta_frequency,
+        ff3_min_obs=args.ff3_min_obs,
         top_n_holdings=args.top_n_holdings,
         output_json=args.output_json,
         wrds_username=args.wrds_username,
@@ -209,6 +219,7 @@ def _apply_overrides(
     end_date: str | None,
     benchmark_ticker: str | None,
     beta_frequency: str | None,
+    ff3_min_obs: int | None,
     top_n_holdings: int | None,
     output_json: str | None,
     wrds_username: str | None,
@@ -221,6 +232,7 @@ def _apply_overrides(
         portfolio_returns_path=config.portfolio_returns_path,
         benchmark_ticker=(benchmark_ticker or config.benchmark_ticker).upper(),
         beta_frequency=beta_frequency or config.beta_frequency,
+        ff3_min_obs=ff3_min_obs or config.ff3_min_obs,
         trading_days_per_year=config.trading_days_per_year,
         top_n_holdings=top_n_holdings or config.top_n_holdings,
         output_value_base=config.output_value_base,
@@ -246,6 +258,7 @@ def _write_analytics_tables(
     holdings_csv = analytics_dir / "current_holdings_snapshot.csv"
     market_cap_parquet = analytics_dir / "market_cap_mix.parquet"
     market_cap_csv = analytics_dir / "market_cap_mix.csv"
+    ff3_dir = analytics_dir / "ff3"
 
     atomic_write_parquet(
         result.benchmark_comparison,
@@ -295,6 +308,7 @@ def _write_analytics_tables(
         sort_by=["bucket_order"],
         mode="replace",
     )
+    ff3_artifacts = _write_ff3_tables(result=result, ff3_dir=ff3_dir)
 
     return {
         "benchmark_comparison_parquet": str(benchmark_parquet),
@@ -305,7 +319,59 @@ def _write_analytics_tables(
         "holdings_snapshot_csv": str(holdings_csv),
         "market_cap_mix_parquet": str(market_cap_parquet),
         "market_cap_mix_csv": str(market_cap_csv),
+        "ff3": ff3_artifacts,
     }
+
+
+def _write_ff3_tables(
+    *,
+    result: PortfolioAnalyticsResult,
+    ff3_dir: Path,
+) -> dict[str, str]:
+    ff3_dir.mkdir(parents=True, exist_ok=True)
+
+    sort_keys = {
+        "security_loadings": ["ticker"],
+        "security_beta_matrix": ["ticker"],
+        "portfolio_exposure_comparison": ["exposure_method"],
+        "portfolio_risk_summary": ["metric"],
+        "portfolio_holdings_risk_summary": ["metric"],
+        "factor_risk_contributions": ["factor"],
+        "factor_covariance": ["factor"],
+        "factor_correlation": ["factor"],
+        "security_factor_covariance": ["ticker"],
+        "security_factor_correlation": ["ticker"],
+        "holdings_ff3_loadings": ["weight_rank", "ticker"],
+    }
+
+    artifacts: dict[str, str] = {}
+    for table_name, frame in result.ff3_analysis.tables.items():
+        preferred_sort = sort_keys.get(table_name)
+        sort_by = _resolve_sort_columns(frame, preferred_sort)
+        parquet_path = ff3_dir / f"{table_name}.parquet"
+        csv_path = ff3_dir / f"{table_name}.csv"
+        atomic_write_parquet(frame, path=parquet_path, sort_by=sort_by, mode="replace")
+        atomic_write_csv(frame, path=csv_path, sort_by=sort_by, mode="replace")
+        artifacts[f"{table_name}_parquet"] = str(parquet_path)
+        artifacts[f"{table_name}_csv"] = str(csv_path)
+
+    holdings_ff3_parquet = ff3_dir / "holdings_ff3_loadings.parquet"
+    holdings_ff3_csv = ff3_dir / "holdings_ff3_loadings.csv"
+    atomic_write_parquet(
+        result.holdings_ff3_loadings,
+        path=holdings_ff3_parquet,
+        sort_by=sort_keys["holdings_ff3_loadings"],
+        mode="replace",
+    )
+    atomic_write_csv(
+        result.holdings_ff3_loadings,
+        path=holdings_ff3_csv,
+        sort_by=sort_keys["holdings_ff3_loadings"],
+        mode="replace",
+    )
+    artifacts["holdings_ff3_loadings_parquet"] = str(holdings_ff3_parquet)
+    artifacts["holdings_ff3_loadings_csv"] = str(holdings_ff3_csv)
+    return artifacts
 
 
 def _summary_payload(
@@ -321,6 +387,7 @@ def _summary_payload(
             "end_date": config.end_date,
             "benchmark_ticker": config.benchmark_ticker,
             "beta_frequency": config.beta_frequency,
+            "ff3_min_obs": config.ff3_min_obs,
             "top_n_holdings": config.top_n_holdings,
             "trading_days_per_year": config.trading_days_per_year,
         },
@@ -345,6 +412,19 @@ def _resolve_factor_window(
         start_date or trade_dates.min().strftime("%Y-%m-%d"),
         end_date or trade_dates.max().strftime("%Y-%m-%d"),
     )
+
+
+def _resolve_sort_columns(
+    frame: pd.DataFrame,
+    preferred: list[str] | None,
+) -> list[str]:
+    if preferred:
+        available = [column for column in preferred if column in frame.columns]
+        if available:
+            return available
+    if len(frame.columns) == 0:
+        raise ValueError("Cannot persist an empty-column dataframe.")
+    return [str(frame.columns[0])]
 
 
 def _require_mapping(value: Any, *, section_name: str) -> dict[str, Any]:

@@ -10,6 +10,7 @@ Data engineering pipeline for Mason Investment Club with a WRDS-first modeling s
 - Publishes curated daily outputs back to Google Sheets.
 - Runs FF3 analysis from persisted daily pipeline outputs plus WRDS factor data.
 - Builds benchmark/composition analytics tables and SVG charts from persisted outputs.
+- Extends the analytics report with FF3 exposure, risk, and holdings-level factor charts.
 
 ## Pipeline Architecture
 ### Daily Returns (stage-based, idempotent)
@@ -38,6 +39,7 @@ PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
 1. Add `SPY` to the Google Sheets `Universe` tab so it is included in `security_returns_daily`.
 2. Run the daily returns stages so the persisted datasets are current.
 3. Run `mic_data.analytics.report` against those persisted datasets.
+4. Review both the benchmark/composition charts and the FF3 model charts written to `outputs/charts/`.
 
 Example:
 ```bash
@@ -146,12 +148,20 @@ PYTHONPATH=src .venv/bin/python -m mic_data.analytics.report \
 - `data/processed/analytics/current_holdings_snapshot.parquet`
 - `data/processed/analytics/market_cap_mix.parquet`
 - `data/processed/analytics/beta_regression.parquet`
+- `data/processed/analytics/ff3/security_loadings.parquet`
+- `data/processed/analytics/ff3/portfolio_exposure_comparison.parquet`
+- `data/processed/analytics/ff3/factor_risk_contributions.parquet`
+- `data/processed/analytics/ff3/holdings_ff3_loadings.parquet`
 - `outputs/analytics/portfolio_dashboard_summary.json`
 - `outputs/charts/performance_vs_spy.svg`
 - `outputs/charts/beta_vs_spy.svg`
 - `outputs/charts/top_holdings.svg`
 - `outputs/charts/market_cap_mix.svg`
 - `outputs/charts/sharpe_ratio.svg`
+- `outputs/charts/ff3_portfolio_exposure.svg`
+- `outputs/charts/ff3_exposure_comparison.svg`
+- `outputs/charts/ff3_factor_risk_contributions.svg`
+- `outputs/charts/ff3_security_heatmap.svg`
 
 ## Tests
 ```bash
@@ -181,3 +191,4 @@ Daily security returns use CRSP `ret`.
 - Performance, beta, and Sharpe analytics use the pipeline's holdings-weighted proxy return series.
 - That means the current holdings snapshot is applied backward across the requested history.
 - Historical portfolio composition changes are not yet modeled.
+- The FF3 charts inherit the same limitation: return-based FF3 results are estimated from that proxy series, and holdings-based FF3 results use the current holdings weights.

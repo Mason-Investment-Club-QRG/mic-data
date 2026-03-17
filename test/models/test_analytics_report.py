@@ -140,6 +140,7 @@ class TestAnalyticsReport(unittest.TestCase):
             factors=factors,
             benchmark_ticker="SPY",
             beta_frequency="weekly",
+            ff3_min_obs=100,
             top_n_holdings=2,
         )
 
@@ -149,6 +150,10 @@ class TestAnalyticsReport(unittest.TestCase):
         self.assertEqual(result.holdings_snapshot.iloc[0]["ticker"], "AAA")
         self.assertEqual(result.holdings_snapshot.iloc[0]["market_cap_bucket"], "Mega Cap")
         self.assertAlmostEqual(float(result.market_cap_mix["portfolio_weight"].sum()), 1.0, places=6)
+        self.assertIn("portfolio_return_exposure", result.summary["ff3"])
+        self.assertIn("mkt_rf", result.holdings_ff3_loadings.columns)
+        self.assertIn("ff3_modeled", result.holdings_ff3_loadings.columns)
+        self.assertTrue(result.holdings_ff3_loadings["ff3_modeled"].all())
         self.assertIn(
             "Historical portfolio composition changes are not yet modeled in this analytics layer.",
             result.summary["metadata"]["limitations"],
@@ -167,6 +172,7 @@ class TestAnalyticsReport(unittest.TestCase):
                 inputs=missing_benchmark_inputs,
                 factors=factors,
                 benchmark_ticker="SPY",
+                ff3_min_obs=100,
             )
 
     def test_main_writes_tables_charts_and_summary_json(self) -> None:
@@ -192,6 +198,7 @@ class TestAnalyticsReport(unittest.TestCase):
                         "run:",
                         '  benchmark_ticker: "SPY"',
                         '  beta_frequency: "weekly"',
+                        "  ff3_min_obs: 100",
                         "  top_n_holdings: 2",
                         "sources:",
                         f'  universe_path: "{universe_path}"',
@@ -218,9 +225,16 @@ class TestAnalyticsReport(unittest.TestCase):
             self.assertEqual(payload["summary"]["metadata"]["benchmark_ticker"], "SPY")
             self.assertTrue((analytics_dir / "benchmark_comparison.parquet").exists())
             self.assertTrue((analytics_dir / "current_holdings_snapshot.csv").exists())
+            self.assertTrue((analytics_dir / "ff3" / "portfolio_exposure_comparison.csv").exists())
+            self.assertTrue((analytics_dir / "ff3" / "holdings_ff3_loadings.parquet").exists())
             self.assertTrue((charts_dir / "performance_vs_spy.svg").exists())
+            self.assertTrue((charts_dir / "ff3_portfolio_exposure.svg").exists())
+            self.assertTrue((charts_dir / "ff3_exposure_comparison.svg").exists())
+            self.assertTrue((charts_dir / "ff3_factor_risk_contributions.svg").exists())
+            self.assertTrue((charts_dir / "ff3_security_heatmap.svg").exists())
             self.assertTrue(summary_json_path.exists())
             self.assertIn("<svg", (charts_dir / "performance_vs_spy.svg").read_text(encoding="utf-8"))
+            self.assertIn("ff3", payload["summary"])
 
 
 if __name__ == "__main__":
