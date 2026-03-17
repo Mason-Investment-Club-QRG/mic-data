@@ -8,8 +8,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from mic_data.market.prices_daily import latest_security_prices
-from mic_data.market.wrds_returns_source import WrdsConnection, WrdsCrspDailyReturnSource
+from mic_data.market.prices_daily import (
+    WrdsConnection,
+    WrdsCrspDailyReturnSource,
+    latest_security_prices,
+)
 
 
 class _FakeConn(WrdsConnection):

@@ -41,7 +41,6 @@ Edit `.env`:
 GOOGLE_APPLICATION_CREDENTIALS=secrets/your_service_account.json
 WRDS_USERNAME=your_wrds_username
 WRDS_PASSWORD=your_wrds_password
-FRED_API_KEY=your_fred_key
 ```
 
 Optional: load `.env` into current shell.

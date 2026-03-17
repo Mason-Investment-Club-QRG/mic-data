@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Historical archive of the pre-ff_factor_matrix FF3 entrypoint.
+# This file is kept for reference only and is not part of the active pipeline.
+
 import argparse
 from dataclasses import replace
 from pathlib import Path
@@ -38,20 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """CLI entry point for FF3 run + validation artifacts.
-
-    Inputs:
-      - CLI flags from build_parser().
-
-    Returns:
-      - None. Prints artifact locations and run status.
-
-    Raises:
-      - Any pipeline exception if both data sources fail or artifacts cannot be written.
-
-    Notes on units:
-      - This runner operates on monthly decimal returns.
-    """
+    """CLI entry point for FF3 run + validation artifacts."""
     args = build_parser().parse_args()
 
     config_path = Path(args.config)

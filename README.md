@@ -40,8 +40,6 @@ PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
   - Holdings/watchlist column mappings and universe output locations.
 - `config/returns_daily.yaml`
   - Daily returns date window, source paths, output paths, and idempotency defaults.
-- `config/ff3_pipeline.yaml`
-  - Legacy FF3 runner settings. Default config is fail-fast and WRDS-first.
 
 ## Setup
 ```bash
@@ -63,7 +61,6 @@ Then edit `.env` once:
 GOOGLE_APPLICATION_CREDENTIALS=secrets/your_service_account.json
 WRDS_USERNAME=your_wrds_username
 WRDS_PASSWORD=your_wrds_password
-FRED_API_KEY=your_fred_key
 ```
 
 The pipeline auto-loads `.env`, so you do not need to export each variable manually.
