@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence, cast
@@ -718,16 +720,154 @@ def _build_limitations(
     return limitations
 
 
+def _load_security_weights_from_csv(path: Path) -> pd.Series:
+    weights = _read_tabular(path)
+    required = {"ticker", "weight"}
+    missing = required - set(weights.columns)
+    if missing:
+        raise ValueError(
+            f"Weights file missing required columns: {sorted(missing)}. "
+            f"Available columns: {list(weights.columns)}"
+        )
+
+    out = weights.copy()
+    out["ticker"] = out["ticker"].astype(str).str.strip().str.upper()
+    out["weight"] = pd.to_numeric(out["weight"], errors="raise").astype("float64")
+    return out.groupby("ticker", sort=True)["weight"].last()
+
+
+def _series_payload(values: pd.Series | None) -> dict[str, float | int | str] | None:
+    if values is None:
+        return None
+
+    payload: dict[str, float | int | str] = {}
+    for key, value in values.items():
+        if pd.isna(value):
+            payload[str(key)] = "nan"
+        elif isinstance(value, (np.floating, float)):
+            payload[str(key)] = float(value)
+        elif isinstance(value, (np.integer, int)):
+            payload[str(key)] = int(value)
+        else:
+            payload[str(key)] = str(value)
+    return payload
+
+
+def analysis_summary_payload(result: FF3AnalysisResult) -> dict[str, object]:
+    return {
+        "metadata": result.metadata,
+        "portfolio_return_exposure": _series_payload(result.portfolio_return_exposure),
+        "portfolio_holdings_exposure": _series_payload(result.portfolio_holdings_exposure),
+        "portfolio_risk_summary": _series_payload(result.portfolio_risk_summary),
+        "portfolio_holdings_risk_summary": _series_payload(
+            result.portfolio_holdings_risk_summary
+        ),
+        "factor_risk_contributions": _series_payload(result.factor_risk_contributions),
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run FF3 analysis from persisted daily pipeline outputs and WRDS factors."
+    )
+    parser.add_argument("--start-date", required=True, help="Inclusive start date (YYYY-MM-DD).")
+    parser.add_argument("--end-date", required=True, help="Inclusive end date (YYYY-MM-DD).")
+    parser.add_argument(
+        "--security-returns-path",
+        default=str(DEFAULT_SECURITY_RETURNS_PATH),
+        help="Path to persisted security returns parquet/csv.",
+    )
+    parser.add_argument(
+        "--portfolio-returns-path",
+        default=str(DEFAULT_PORTFOLIO_RETURNS_PATH),
+        help="Path to persisted portfolio returns parquet/csv.",
+    )
+    parser.add_argument(
+        "--weights-path",
+        default=None,
+        help="Optional CSV/parquet with ticker and weight columns for holdings-based exposure.",
+    )
+    parser.add_argument(
+        "--wrds-username",
+        default=None,
+        help="Optional WRDS username override for factor pulls.",
+    )
+    parser.add_argument(
+        "--min-obs",
+        type=int,
+        default=60,
+        help="Minimum overlapping observations required per regression.",
+    )
+    parser.add_argument(
+        "--tickers",
+        nargs="*",
+        default=None,
+        help="Optional ticker subset filter for security-level analysis.",
+    )
+    parser.add_argument(
+        "--output-json",
+        default=None,
+        help="Optional path to write the analysis summary JSON.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = build_parser().parse_args(list(argv) if argv is not None else None)
+
+    inputs = load_pipeline_return_inputs(
+        security_returns_path=args.security_returns_path,
+        portfolio_returns_path=args.portfolio_returns_path,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        tickers=args.tickers,
+    )
+    factors = load_ff3_factors_from_wrds(
+        start_date=args.start_date,
+        end_date=args.end_date,
+        username=args.wrds_username,
+    )
+    security_weights = (
+        _load_security_weights_from_csv(Path(args.weights_path))
+        if isinstance(args.weights_path, str) and args.weights_path
+        else None
+    )
+    result = run_ff3_factor_analysis(
+        security_returns=inputs.security_returns,
+        portfolio_returns=inputs.portfolio_returns,
+        factors=factors,
+        security_weights=security_weights,
+        min_obs=args.min_obs,
+    )
+
+    payload = analysis_summary_payload(result)
+    rendered = json.dumps(payload, indent=2, default=str)
+
+    if isinstance(args.output_json, str) and args.output_json:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+
+    print(rendered)
+
+
 __all__ = [
     "DEFAULT_PORTFOLIO_RETURNS_PATH",
     "DEFAULT_SECURITY_RETURNS_PATH",
     "FACTOR_BETA_COLUMNS",
     "FF3AnalysisResult",
     "PipelineReturnInputs",
+    "analysis_summary_payload",
+    "build_parser",
     "estimate_portfolio_ff3_loading",
     "estimate_security_ff3_loadings",
     "load_ff3_factors_from_wrds",
     "load_pipeline_return_inputs",
+    "main",
     "normalize_ff3_factors",
     "run_ff3_factor_analysis",
 ]
+
+
+if __name__ == "__main__":
+    main()

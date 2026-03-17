@@ -71,6 +71,13 @@ PYTHONPATH=src python -m mic_data.market.prices_daily run-all --config config/re
 Monthly FF3 analysis should read the persisted daily outputs from
 `mic_data.models.ff_factor_matrix` rather than pulling a second price source.
 
+Example:
+```bash
+PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31
+```
+
 ### 7) Run tests
 ```bash
 PYTHONPATH=src .venv/bin/python -m unittest discover -s test/models -p 'test_*.py'

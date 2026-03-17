@@ -23,7 +23,15 @@ Optional wrapper:
 
 ### Monthly FF3 Analysis
 1. Run the daily returns stages so `security_returns_daily` and `portfolio_returns_daily` exist.
-2. Consume those persisted datasets from `mic_data.models.ff_factor_matrix`.
+2. Run `mic_data.models.ff_factor_matrix` against those persisted datasets.
+
+Example:
+```bash
+PYTHONPATH=src .venv/bin/python -m mic_data.models.ff_factor_matrix \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31 \
+  --output-json outputs/validation/ff3_summary_2025.json
+```
 
 ## Key Config Files
 - `config/google_sheets.yaml`

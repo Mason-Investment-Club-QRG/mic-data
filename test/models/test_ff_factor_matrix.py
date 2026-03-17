@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import io
+import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -11,6 +15,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from mic_data.models.ff_factor_matrix import (
+    PipelineReturnInputs,
+    main,
     estimate_portfolio_ff3_loading,
     load_pipeline_return_inputs,
     run_ff3_factor_analysis,
@@ -155,6 +161,27 @@ class TestFFFactorMatrix(unittest.TestCase):
 
         self.assertIn("mkt_rf", result.index)
         self.assertIn("r2", result.index)
+
+    def test_main_prints_json_summary(self) -> None:
+        security_returns, portfolio_returns, factors = self._build_inputs()
+        payload_buffer = io.StringIO()
+
+        with patch(
+            "mic_data.models.ff_factor_matrix.load_pipeline_return_inputs",
+            return_value=PipelineReturnInputs(
+                security_returns=security_returns,
+                portfolio_returns=portfolio_returns,
+            ),
+        ), patch(
+            "mic_data.models.ff_factor_matrix.load_ff3_factors_from_wrds",
+            return_value=factors,
+        ), redirect_stdout(payload_buffer):
+            main(["--start-date", "2024-01-01", "--end-date", "2024-12-31", "--min-obs", "100"])
+
+        payload = json.loads(payload_buffer.getvalue())
+        self.assertIn("portfolio_return_exposure", payload)
+        self.assertIn("metadata", payload)
+        self.assertEqual(payload["metadata"]["modeled_security_count"], 2)
 
 
 if __name__ == "__main__":
