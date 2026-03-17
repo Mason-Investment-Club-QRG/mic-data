@@ -1,16 +1,21 @@
-google_sheets:
-  sheet_id: "1Vk9nrrh9RgKK4w3kGDC5J3A1luuPnwdMVMPbAgY3qjA"
-  tab_name: "Holdings"
+google_sheets_config_path: "config/google_sheets.yaml"
 
 mapping:
-  ticker: "TICKER"
-  shares: "SHARES"
-  name: "STOCK"
-  sector: "SECTOR"
+  holdings:
+    ticker: "TICKER"
+    shares: "SHARES"
+    name: "STOCK"
+    sector: "SECTOR"
+  watchlist:
+    ticker: "TICKER"
+    name: "NAME"
+    sector: "SECTOR"
 
 outputs:
   processed_path: "data/processed/positions_latest.csv"
   raw_dir: "data/raw/positions"
+  universe_latest_path: "data/processed/universe_latest.parquet"
+  universe_snapshot_dir: "data/raw/universe"
 
 options:
   include_as_of: true
