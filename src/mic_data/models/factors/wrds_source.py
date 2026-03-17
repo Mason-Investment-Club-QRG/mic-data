@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pandas as pd
 
+from mic_data.config.secrets import wrds_username
 from mic_data.models.constants import FACTOR_COLUMNS, ModelFrequency
 from mic_data.models.interfaces import FactorSource
 
@@ -137,7 +137,7 @@ class WrdsFactorSource(FactorSource):
         return monthly
 
     def _connect(self) -> WrdsConnection:
-        username = self.username or os.getenv("WRDS_USERNAME")
+        username = wrds_username(self.username)
         factory = self.connection_factory
         if factory is not None:
             return factory(wrds_username=username)
