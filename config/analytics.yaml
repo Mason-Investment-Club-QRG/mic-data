@@ -1,0 +1,20 @@
+run:
+  start_date: null
+  end_date: null
+  benchmark_ticker: "SPY"
+  beta_frequency: "weekly"
+  ff3_min_obs: 60
+  trading_days_per_year: 252
+  top_n_holdings: 5
+  output_value_base: 100.0
+
+sources:
+  universe_path: "data/processed/universe_latest.parquet"
+  security_returns_path: "data/processed/returns/security_returns_daily.parquet"
+  portfolio_returns_path: "data/processed/returns/portfolio_returns_daily.parquet"
+  wrds_username: null
+
+outputs:
+  analytics_dir: "data/processed/analytics"
+  charts_dir: "outputs/charts"
+  summary_json_path: "outputs/analytics/portfolio_dashboard_summary.json"

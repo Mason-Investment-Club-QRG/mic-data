@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
+
+if [[ -x "$VENV_PYTHON" ]]; then
+  PYTHON_BIN="$VENV_PYTHON"
+else
+  PYTHON_BIN="${PYTHON:-python3}"
+fi
+
+export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/mic <command> [args]
+
+Commands:
+  daily       Run the daily returns pipeline wrapper
+  analytics   Run the portfolio analytics report
+  ff3         Run standalone FF3 analysis
+  test        Run the model test suite
+  module      Run any Python module inside this repo
+  python      Open Python with repo imports available
+  help        Show this help text
+
+Examples:
+  ./scripts/mic daily --config config/returns_daily.yaml
+  ./scripts/mic analytics --config config/analytics.yaml --start-date 2025-01-01 --end-date 2025-12-31
+  ./scripts/mic ff3 --start-date 2025-01-01 --end-date 2025-12-31 --output-json outputs/validation/ff3_summary_2025.json
+  ./scripts/mic module mic_data.positions.sync --config config/positions.yaml --if-exists replace
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+  daily)
+    exec "$PYTHON_BIN" -m mic_data.market.prices_daily run-all "$@"
+    ;;
+  analytics)
+    exec "$PYTHON_BIN" -m mic_data.analytics.report "$@"
+    ;;
+  ff3)
+    exec "$PYTHON_BIN" -m mic_data.models.ff_factor_matrix "$@"
+    ;;
+  test)
+    exec "$PYTHON_BIN" -m unittest discover -s test/models -p 'test_*.py'
+    ;;
+  module)
+    if [[ $# -eq 0 ]]; then
+      echo "module name is required" >&2
+      usage
+      exit 1
+    fi
+    MODULE_NAME="$1"
+    shift
+    exec "$PYTHON_BIN" -m "$MODULE_NAME" "$@"
+    ;;
+  python)
+    exec "$PYTHON_BIN" "$@"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    echo "unknown command: $COMMAND" >&2
+    usage
+    exit 1
+    ;;
+esac

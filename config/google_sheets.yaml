@@ -1,0 +1,16 @@
+google_sheets:
+  sheet_id: "1Vk9nrrh9RgKK4w3kGDC5J3A1luuPnwdMVMPbAgY3qjA"
+  credentials_env_var: "GOOGLE_APPLICATION_CREDENTIALS"
+
+  inputs:
+    holdings_tab: "Holdings"
+    watchlist_tab: "Universe"
+
+  outputs:
+    security_returns_tab: "SecurityReturnsDaily"
+    portfolio_returns_tab: "PortfolioReturnsDaily"
+    qa_tab: "DailyQA"
+
+  options:
+    clear_before_write: true
+    max_rows: 50000

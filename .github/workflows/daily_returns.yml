@@ -1,0 +1,96 @@
+name: Daily Returns Pipeline
+
+on:
+  workflow_dispatch:
+  schedule:
+    # UTC window that captures 5:00 PM ET in both standard and daylight time.
+    - cron: "5 20-23 * * 1-5"
+
+concurrency:
+  group: daily-returns-prod
+  cancel-in-progress: false
+
+jobs:
+  run-daily-returns:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Determine ET execution window
+        id: et_gate
+        shell: bash
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          import os
+          from zoneinfo import ZoneInfo
+
+          now_et = datetime.now(ZoneInfo("America/New_York"))
+          should_run = now_et.weekday() < 5 and now_et.hour == 17 and now_et.minute <= 15
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as fh:
+              fh.write(f"should_run={'true' if should_run else 'false'}\n")
+              fh.write(f"now_et={now_et.isoformat()}\n")
+          print(f"now_et={now_et.isoformat()} should_run={should_run}")
+          PY
+
+      - name: Materialize Google service account key
+        if: steps.et_gate.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p secrets
+          printf '%s' "${GOOGLE_SERVICE_ACCOUNT_JSON}" > secrets/google_service_account.json
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Stage 1 - Holdings sync
+        if: steps.et_gate.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: PYTHONPATH=src python -m mic_data.positions.sync --config config/positions.yaml --if-exists replace
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: secrets/google_service_account.json
+
+      - name: Stage 2 - Universe sync
+        if: steps.et_gate.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: PYTHONPATH=src python -m mic_data.positions.universe_sync --config config/positions.yaml --if-exists replace
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: secrets/google_service_account.json
+
+      - name: Stage 3 - WRDS pull
+        if: steps.et_gate.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: PYTHONPATH=src python -m mic_data.market.pull_wrds_returns --config config/returns_daily.yaml --if-exists replace
+        env:
+          WRDS_USERNAME: ${{ secrets.WRDS_USERNAME }}
+          WRDS_PASSWORD: ${{ secrets.WRDS_PASSWORD }}
+
+      - name: Stage 4 - Portfolio aggregation
+        if: steps.et_gate.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: PYTHONPATH=src python -m mic_data.market.build_portfolio_returns --config config/returns_daily.yaml --if-exists replace
+
+      - name: Stage 5 - Publish sheets
+        if: steps.et_gate.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: PYTHONPATH=src python -m mic_data.reporting.publish_sheets --config config/returns_daily.yaml --skip-unchanged
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: secrets/google_service_account.json
+
+      - name: Upload logs and manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-returns-artifacts
+          path: |
+            outputs/logs/**
+            outputs/manifests/**
+          if-no-files-found: warn
