@@ -75,6 +75,9 @@ class FF3AnalysisResult:
 class _FF3Fit:
     alpha: float
     betas: pd.Series
+    std_errs: pd.Series
+    t_stats: pd.Series
+    p_values: pd.Series
     r2: float
     n_obs: int
     residual_var: float
@@ -87,19 +90,30 @@ class _FF3Fit:
         explained_var_ratio = (
             self.explained_var / total_var if total_var > 0 else float("nan")
         )
-        return pd.Series(
-            {
-                "alpha": self.alpha,
-                "mkt_rf": float(self.betas["mkt_rf"]),
-                "smb": float(self.betas["smb"]),
-                "hml": float(self.betas["hml"]),
-                "r2": self.r2,
-                "n_obs": self.n_obs,
-                "residual_var": self.residual_var,
-                "explained_var": self.explained_var,
-                "explained_var_ratio": explained_var_ratio,
-            }
-        )
+        payload: dict[str, float | int] = {
+            "alpha": self.alpha,
+            "alpha_std_err": float(self.std_errs["const"]),
+            "alpha_t_stat": float(self.t_stats["const"]),
+            "alpha_p_value": float(self.p_values["const"]),
+            "mkt_rf": float(self.betas["mkt_rf"]),
+            "mkt_rf_std_err": float(self.std_errs["mkt_rf"]),
+            "mkt_rf_t_stat": float(self.t_stats["mkt_rf"]),
+            "mkt_rf_p_value": float(self.p_values["mkt_rf"]),
+            "smb": float(self.betas["smb"]),
+            "smb_std_err": float(self.std_errs["smb"]),
+            "smb_t_stat": float(self.t_stats["smb"]),
+            "smb_p_value": float(self.p_values["smb"]),
+            "hml": float(self.betas["hml"]),
+            "hml_std_err": float(self.std_errs["hml"]),
+            "hml_t_stat": float(self.t_stats["hml"]),
+            "hml_p_value": float(self.p_values["hml"]),
+            "r2": self.r2,
+            "n_obs": self.n_obs,
+            "residual_var": self.residual_var,
+            "explained_var": self.explained_var,
+            "explained_var_ratio": explained_var_ratio,
+        }
+        return pd.Series(payload)
 
 
 def load_pipeline_return_inputs(
@@ -151,7 +165,7 @@ def load_ff3_factors_from_wrds(
     username: str | None = None,
     connection_factory: WrdsConnectionFactory | None = None,
 ) -> pd.DataFrame:
-    """Fetch daily FF3 factors from WRDS and return canonical decimal columns."""
+    """Fetch daily FF3 factors from WRDS and return canonical columns."""
 
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
@@ -181,7 +195,11 @@ def load_ff3_factors_from_wrds(
 
 
 def normalize_ff3_factors(factors: pd.DataFrame) -> pd.DataFrame:
-    """Normalize factor columns to canonical daily FF3 schema."""
+    """Normalize factor columns to canonical daily FF3 schema.
+
+    Factor values are assumed to already use the same return units as the
+    pipeline's decimal return series; this function normalizes schema, not scale.
+    """
 
     out = factors.copy().rename(columns=_FACTOR_RENAME_MAP)
 
@@ -255,6 +273,7 @@ def estimate_security_ff3_loadings(
     security_loadings = pd.DataFrame(modeled_rows)
     security_loadings.index.name = "ticker"
     security_loadings = security_loadings.sort_index()
+    security_loadings["n_obs"] = security_loadings["n_obs"].astype("int64")
 
     return security_loadings, skipped
 
@@ -442,6 +461,7 @@ def _filter_date_window(
     end_date: str | None,
 ) -> pd.DataFrame:
     out = frame.copy()
+    out[date_col] = _normalize_dates(out[date_col])
     if start_date is not None:
         out = out[out[date_col] >= pd.Timestamp(start_date)].copy()
     if end_date is not None:
@@ -482,9 +502,14 @@ def _normalize_dates(values: pd.Series | pd.Index) -> pd.DatetimeIndex:
 def _require_unique_ticker_dates(security_returns: pd.DataFrame) -> None:
     duplicated = security_returns.duplicated(["trade_date", "ticker"], keep=False)
     if bool(duplicated.any()):
+        sample_columns = [
+            column
+            for column in ("trade_date", "ticker", "permno")
+            if column in security_returns.columns
+        ]
         sample = security_returns.loc[
             duplicated,
-            ["trade_date", "ticker", "permno"],
+            sample_columns,
         ].head(10)
         raise ValueError(
             "security_returns contains multiple rows for the same trade_date/ticker. "
@@ -524,11 +549,15 @@ def _fit_ff3_model(
             "hml": float(model.params["hml"]),
         }
     )
+    ordered_params = ["const", *FACTOR_BETA_COLUMNS]
     explained_var = float(model.fittedvalues.var(ddof=1))
 
     return _FF3Fit(
         alpha=float(model.params["const"]),
         betas=betas,
+        std_errs=model.bse.reindex(ordered_params).astype("float64"),
+        t_stats=model.tvalues.reindex(ordered_params).astype("float64"),
+        p_values=model.pvalues.reindex(ordered_params).astype("float64"),
         r2=float(model.rsquared),
         n_obs=int(model.nobs),
         residual_var=float(model.resid.var(ddof=1)),
@@ -542,6 +571,8 @@ def _build_security_factor_covariance(
     security_loadings: pd.DataFrame,
     factor_covariance: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Build the total security return covariance implied by the FF3 model."""
+
     beta_matrix = security_loadings[list(FACTOR_BETA_COLUMNS)]
     residual_var = security_loadings["residual_var"]
 
@@ -703,6 +734,10 @@ def _build_limitations(
     security_weights: pd.Series | None,
 ) -> list[str]:
     limitations: list[str] = []
+    limitations.append(
+        "factor_risk_contributions are signed variance contributions and can be "
+        "negative when factors are negatively correlated."
+    )
     if "holdings_weighted_sum" in portfolio_methods:
         limitations.append(
             "portfolio_ret is the pipeline's holdings-weighted proxy series, not a full "
@@ -717,6 +752,11 @@ def _build_limitations(
         limitations.append(
             "Holdings-based portfolio exposure was not computed because no security weight "
             "snapshot was provided to the analytics module."
+        )
+    else:
+        limitations.append(
+            "Holdings-based alpha is an approximate weighted average of separately "
+            "estimated security alphas, not a directly estimated portfolio alpha."
         )
     return limitations
 
@@ -737,16 +777,24 @@ def _load_security_weights_from_csv(path: Path) -> pd.Series:
     return out.groupby("ticker", sort=True)["weight"].last()
 
 
-def _series_payload(values: pd.Series | None) -> dict[str, float | int | str] | None:
+def _series_payload(values: pd.Series | None) -> dict[str, float | int | str | None] | None:
     if values is None:
         return None
 
-    payload: dict[str, float | int | str] = {}
+    payload: dict[str, float | int | str | None] = {}
     for key, value in values.items():
         if pd.isna(value):
-            payload[str(key)] = "nan"
+            payload[str(key)] = None
         elif isinstance(value, (np.floating, float)):
-            payload[str(key)] = float(value)
+            numeric_value = float(value)
+            if (
+                np.isfinite(numeric_value)
+                and numeric_value.is_integer()
+                and (str(key) == "n_obs" or str(key).endswith("_count"))
+            ):
+                payload[str(key)] = int(numeric_value)
+            else:
+                payload[str(key)] = numeric_value
         elif isinstance(value, (np.integer, int)):
             payload[str(key)] = int(value)
         else:

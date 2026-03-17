@@ -66,6 +66,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Fastest Way To Run
+From the repo root, use the wrapper script:
+
+```bash
+./scripts/mic help
+```
+
+Common commands:
+
+```bash
+./scripts/mic daily --config config/returns_daily.yaml
+./scripts/mic analytics --config config/analytics.yaml --start-date 2025-01-01 --end-date 2025-12-31
+./scripts/mic ff3 --start-date 2025-01-01 --end-date 2025-12-31 --output-json outputs/validation/ff3_summary_2025.json
+./scripts/mic module mic_data.positions.sync --config config/positions.yaml --if-exists replace
+./scripts/mic test
+```
+
+This wrapper automatically uses `.venv/bin/python` when available and sets `PYTHONPATH=src` for you.
+
 ## Credentials
 Use one local file for all secrets:
 

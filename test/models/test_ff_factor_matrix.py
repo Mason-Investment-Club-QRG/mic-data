@@ -15,7 +15,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from mic_data.models.ff_factor_matrix import (
+    FF3AnalysisResult,
     PipelineReturnInputs,
+    _require_unique_ticker_dates,
+    analysis_summary_payload,
     main,
     estimate_portfolio_ff3_loading,
     load_pipeline_return_inputs,
@@ -114,6 +117,9 @@ class TestFFFactorMatrix(unittest.TestCase):
         self.assertAlmostEqual(float(result.security_loadings.loc["AAA", "mkt_rf"]), 1.20, delta=0.08)
         self.assertAlmostEqual(float(result.security_loadings.loc["BBB", "hml"]), 0.40, delta=0.08)
         self.assertAlmostEqual(float(result.portfolio_return_exposure["mkt_rf"]), 1.04, delta=0.08)
+        self.assertIn("alpha_t_stat", result.security_loadings.columns)
+        self.assertIn("mkt_rf_p_value", result.security_loadings.columns)
+        self.assertTrue(pd.api.types.is_integer_dtype(result.security_loadings["n_obs"]))
         self.assertIsNotNone(result.portfolio_holdings_exposure)
         assert result.portfolio_holdings_exposure is not None
         self.assertAlmostEqual(float(result.portfolio_holdings_exposure["smb"]), 0.15, delta=0.08)
@@ -190,6 +196,63 @@ class TestFFFactorMatrix(unittest.TestCase):
 
         self.assertIn("mkt_rf", result.index)
         self.assertIn("r2", result.index)
+        self.assertIn("alpha_std_err", result.index)
+        self.assertIn("hml_t_stat", result.index)
+
+    def test_analysis_summary_payload_uses_nulls_and_integer_counts(self) -> None:
+        security_returns, portfolio_returns, factors = self._build_inputs()
+
+        result = run_ff3_factor_analysis(
+            security_returns=security_returns,
+            portfolio_returns=portfolio_returns,
+            factors=factors,
+            security_weights=pd.Series({"AAA": 0.6, "BBB": 0.4}),
+            min_obs=100,
+        )
+        risk_summary = result.portfolio_risk_summary.copy()
+        risk_summary.loc["factor_share"] = np.nan
+
+        payload = analysis_summary_payload(
+            FF3AnalysisResult(
+                security_loadings=result.security_loadings,
+                security_beta_matrix=result.security_beta_matrix,
+                portfolio_return_exposure=result.portfolio_return_exposure,
+                portfolio_holdings_exposure=result.portfolio_holdings_exposure,
+                factor_covariance=result.factor_covariance,
+                factor_correlation=result.factor_correlation,
+                security_factor_covariance=result.security_factor_covariance,
+                security_factor_correlation=result.security_factor_correlation,
+                factor_risk_contributions=result.factor_risk_contributions,
+                portfolio_risk_summary=risk_summary,
+                portfolio_holdings_risk_summary=result.portfolio_holdings_risk_summary,
+                tables=result.tables,
+                metadata=result.metadata,
+            )
+        )
+
+        assert payload["portfolio_return_exposure"] is not None
+        assert payload["portfolio_holdings_risk_summary"] is not None
+        assert payload["portfolio_risk_summary"] is not None
+        self.assertIsNone(payload["portfolio_risk_summary"]["factor_share"])
+        self.assertIsInstance(payload["portfolio_return_exposure"]["n_obs"], int)
+        self.assertIsInstance(
+            payload["portfolio_holdings_risk_summary"]["modeled_weight_count"],
+            int,
+        )
+
+    def test_require_unique_ticker_dates_handles_missing_permno_in_error_sample(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "multiple rows for the same trade_date/ticker",
+        ):
+            _require_unique_ticker_dates(
+                pd.DataFrame(
+                    {
+                        "trade_date": [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-02")],
+                        "ticker": ["AAA", "AAA"],
+                    }
+                )
+            )
 
     def test_main_prints_json_summary(self) -> None:
         security_returns, portfolio_returns, factors = self._build_inputs()
