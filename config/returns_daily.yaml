@@ -1,0 +1,23 @@
+run:
+  start_date: "2026-02-28"
+  end_date: "2030-12-31"
+
+sources:
+  google_sheets_config_path: "config/google_sheets.yaml"
+  positions_config_path: "config/positions.yaml"
+  wrds_username: null
+
+outputs:
+  universe_latest_path: "data/processed/universe_latest.parquet"
+  security_returns_path: "data/processed/returns/security_returns_daily.parquet"
+  security_returns_csv_path: "data/processed/returns/security_returns_daily.csv"
+  portfolio_returns_path: "data/processed/returns/portfolio_returns_daily.parquet"
+  portfolio_returns_csv_path: "data/processed/returns/portfolio_returns_daily.csv"
+  daily_qa_path: "data/processed/returns/daily_qa.parquet"
+  manifests_dir: "outputs/manifests"
+  locks_dir: "outputs/locks"
+  logs_dir: "outputs/logs"
+
+options:
+  if_exists: "replace"
+  dry_run: false
